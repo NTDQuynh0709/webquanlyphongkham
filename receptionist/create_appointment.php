@@ -129,9 +129,7 @@ function validate_working_hours(DateTime $start, int $serviceMin = SERVICE_MIN):
       }
 
       // duration không vượt tan ca
-      if ($end > $e) {
-        return [false, "Lịch khám (".SERVICE_MIN." phút) không được vượt quá giờ tan ca (".$e->format('H:i').")."];
-      }
+      
 
       return [true, "OK"];
     }

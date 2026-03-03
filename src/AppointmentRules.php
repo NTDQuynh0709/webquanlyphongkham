@@ -64,9 +64,7 @@ function validate_working_hours(DateTime $start, int $serviceMin = SERVICE_MIN):
         return [false, "Giờ đặt lịch phải trước giờ tan ca ít nhất ".LAST_BOOKING_BEFORE_SHIFT_END_MIN." phút (ca này tan lúc ".$e->format('H:i').")"];
       }
 
-      if ($end > $e) {
-        return [false, "Lịch khám (".SERVICE_MIN." phút) không được vượt quá giờ tan ca (".$e->format('H:i').")."];
-      }
+      
 
       return [true, "OK"];
     }

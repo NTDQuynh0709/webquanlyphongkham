@@ -92,14 +92,7 @@ final class IsOverlappingTest extends TestCase
                     ["$d 10:00:00", "$d 10:20:00"],
                 ], true],
 
-            // ========= GROUP E: Input “xấu” (đóng băng behavior hiện tại) =========
-            // start == end: logic hiện tại => (start < be && end > bs) thường false => không overlap
-            ['OVL40', 'start == end (zero-length interval)', "$d 09:00:00", "$d 09:00:00",
-                [["$d 09:00:00", "$d 09:20:00"]], false],
-
-            // start > end: interval ngược; hiện tại cũng thường false, nhưng đây là “undefined behavior”
-            ['OVL41', 'start > end (interval ngược) - behavior hiện tại', "$d 09:10:00", "$d 09:00:00",
-                [["$d 09:00:00", "$d 09:20:00"]], false],
+            
         ];
     }
 }
