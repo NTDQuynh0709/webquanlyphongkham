@@ -41,25 +41,25 @@ function is_valid_time_hm($t){
  * Parse input: empty / phone / patient_id / text
  */
 function classify_patient_search_input(string $q): array {
-  $raw = trim($q);
+    $raw = trim($q);
 
-  if ($raw === '') {
-    return ['kind' => 'empty', 'compact' => ''];
-  }
+    if ($raw === '') {
+        return ['kind' => 'empty', 'compact' => ''];
+    }
 
-  $compact = preg_replace('/\s+/', '', $raw);
+    $compact = preg_replace('/\s+/', '', $raw);
 
-  // phone: +? 8-15 digits
-  if (preg_match('/^\+?\d{8,15}$/', $compact)) {
-    return ['kind' => 'phone', 'compact' => $compact];
-  }
+    // phone: +? 10-15 digits
+    if (preg_match('/^\+?\d{10,15}$/', $compact)) {
+        return ['kind' => 'phone', 'compact' => $compact];
+    }
 
-  // patient_id: chỉ digits
-  if (preg_match('/^\d+$/', $compact)) {
-    return ['kind' => 'patient_id', 'compact' => $compact];
-  }
+    // patient_id: chỉ digits dưới 10 số
+    if (preg_match('/^\d{1,9}$/', $compact)) {
+        return ['kind' => 'patient_id', 'compact' => $compact];
+    }
 
-  return ['kind' => 'text', 'compact' => $compact];
+    return ['kind' => 'text', 'compact' => $compact];
 }
 
 /** ====== CONFIG ====== */

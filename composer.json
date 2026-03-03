@@ -1,0 +1,22 @@
+{
+    "name": "nguyen-dquynh/webquanlyphongkham",
+    "autoload": {
+        "psr-4": {
+            "NguyenDquynh\\Webquanlyphongkham\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Nguyen Thi Diem Quynh",
+            "email": "dq7925@gmail.com"
+        }
+    ],
+    "config": {
+        "audit": {
+            "block-insecure": false
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "10"
+    }
+}
