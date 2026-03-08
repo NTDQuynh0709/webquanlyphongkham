@@ -291,12 +291,12 @@ try {
             ");
             foreach ($items as $it) {
                 $stmtItem->execute([
-                    $prescription_id,
-                    encrypt_db($it['medication_name']),
-                    encrypt_db($it['dosage']),
-                    (int)$it['days'],
-                    encrypt_db($it['instructions']),
-                ]);
+                $prescription_id,
+                $it['medication_name'],
+                $it['dosage'],
+                (int)$it['days'],
+                $it['instructions'],
+            ]);
             }
         }
     } else {

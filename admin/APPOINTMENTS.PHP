@@ -38,7 +38,7 @@ function statusPillHtml($status){
 }
 
 /* =========================
-   LOAD ADMIN (giống dashboard)
+   LOAD ADMIN
 ========================= */
 $admin = null;
 try {
@@ -58,7 +58,6 @@ $admin_initial = mb_substr($admin_name, 0, 1, 'UTF-8');
 ========================= */
 function loadAppointmentDetail(PDO $conn, int $appointment_id): array {
     try {
-        // Appointment + patient + doctor + department
         $stmt = $conn->prepare("
             SELECT a.*,
                    p.full_name       AS patient_name,
@@ -78,7 +77,6 @@ function loadAppointmentDetail(PDO $conn, int $appointment_id): array {
         $a = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$a) return ['ok'=>false, 'message'=>'Không tìm thấy lịch khám!'];
 
-        // Medical record by appointment
         $stmt = $conn->prepare("
             SELECT mr.*,
                    d.full_name AS doctor_name
@@ -90,7 +88,6 @@ function loadAppointmentDetail(PDO $conn, int $appointment_id): array {
         $stmt->execute(['aid' => $appointment_id]);
         $rec = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 
-        // Prescriptions by record
         $rxs = [];
         if ($rec && !empty($rec['record_id'])) {
             $stmt = $conn->prepare("
@@ -120,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
     try {
         $action = (string)$_GET['action'];
 
-        // LIST (có search + filter)
+        // LIST
         if ($action === 'list') {
             $q = trim($_POST['q'] ?? '');
             $status = trim($_POST['status'] ?? '');
@@ -200,7 +197,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $deptId = (int)($_POST['department_id'] ?? 0);
             if ($deptId <= 0) { echo json_encode(['success'=>true,'rows'=>[]]); exit; }
 
-            // Ưu tiên doctors.department_id nếu có; nếu không có thì fallback specialty = department_name
             $stmt = $conn->prepare("
                 SELECT d.doctor_id, d.full_name
                 FROM doctors d
@@ -234,7 +230,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 exit;
             }
 
-            // check patient
             $stmt = $conn->prepare("SELECT COUNT(*) FROM patients WHERE patient_id=:id AND is_deleted=0");
             $stmt->execute(['id'=>$patient_id]);
             if ((int)$stmt->fetchColumn() <= 0) {
@@ -242,7 +237,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 exit;
             }
 
-            // check dept
             $stmt = $conn->prepare("SELECT COUNT(*) FROM departments WHERE department_id=:id");
             $stmt->execute(['id'=>$department_id]);
             if ((int)$stmt->fetchColumn() <= 0) {
@@ -250,7 +244,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 exit;
             }
 
-            // check doctor
             $stmt = $conn->prepare("SELECT COUNT(*) FROM doctors WHERE doctor_id=:id AND is_deleted=0");
             $stmt->execute(['id'=>$doctor_id]);
             if ((int)$stmt->fetchColumn() <= 0) {
@@ -335,16 +328,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             exit;
         }
 
-        // DELETE (hard delete)
-        if ($action === 'delete') {
+        // CANCEL APPOINTMENT (không xóa DB)
+        if ($action === 'cancel') {
             $appointment_id = (int)($_POST['appointment_id'] ?? 0);
             if ($appointment_id <= 0) {
                 echo json_encode(['success'=>false,'message'=>'appointment_id không hợp lệ!']);
                 exit;
             }
-            $stmt = $conn->prepare("DELETE FROM appointments WHERE appointment_id=:id");
+
+            $stmt = $conn->prepare("SELECT status FROM appointments WHERE appointment_id = :id LIMIT 1");
+            $stmt->execute(['id' => $appointment_id]);
+            $current = $stmt->fetchColumn();
+
+            if ($current === false) {
+                echo json_encode(['success'=>false,'message'=>'Không tìm thấy lịch khám!']);
+                exit;
+            }
+
+            if ($current === 'Hủy') {
+                echo json_encode(['success'=>false,'message'=>'Lịch khám này đã ở trạng thái Hủy.']);
+                exit;
+            }
+
+            $stmt = $conn->prepare("UPDATE appointments SET status = 'Hủy' WHERE appointment_id = :id");
             $stmt->execute(['id'=>$appointment_id]);
-            echo json_encode(['success'=>true,'message'=>'Đã xóa lịch khám!']);
+
+            echo json_encode(['success'=>true,'message'=>'Đã hủy lịch khám!']);
             exit;
         }
 
@@ -358,7 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
 }
 
 /* =========================
-   PAGE DATA (for Add/Edit selects)
+   PAGE DATA
 ========================= */
 try {
     $patients = $conn->query("
@@ -464,7 +473,6 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg
 .nav-item.active{background:#f0f2ff;border-color:rgba(102,126,234,0.25);color:var(--primary);font-weight:900}
 .icon{width:22px;text-align:center;font-size:18px}
 
-/* Card */
 .card{
     background:var(--card);
     border:1px solid var(--line);
@@ -549,7 +557,6 @@ tbody tr.selected{background:#f0f2ff !important}
 .muted{color:var(--muted);font-size:12px;font-weight:800}
 .hint{color:var(--muted);font-size:13px;line-height:1.45;font-weight:800}
 
-/* Pills */
 .pill{
     display:inline-flex;align-items:center;gap:8px;
     padding:6px 10px;border-radius:999px;
@@ -592,7 +599,6 @@ tbody tr.selected{background:#f0f2ff !important}
 
 .notice{padding:12px;border-radius:14px;border:1px dashed #e5e7eb;background:#fafafa;color:#374151;font-weight:800;line-height:1.6;margin-top:10px}
 
-/* Modal */
 .modal-backdrop{
     position:fixed;inset:0;background:rgba(17,24,39,0.45);
     display:none;align-items:center;justify-content:center;z-index:1000;
@@ -623,7 +629,6 @@ input,select,textarea{
 textarea{min-height:90px;resize:vertical}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(102,126,234,0.18)}
 
-/* Toast */
 .toast-wrap{position:fixed;top:16px;right:16px;z-index:1100;display:grid;gap:10px}
 .toast{
     min-width:260px;max-width:360px;
@@ -645,7 +650,6 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
 <div class="header">
     <div class="header-left">
         <h1>📅 Quản lý lịch khám</h1>
-        
     </div>
     <div class="header-right">
         <div class="avatar"><?php echo h($admin_initial); ?></div>
@@ -694,7 +698,6 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
             </div>
 
             <div class="content-grid">
-                <!-- LEFT: LIST -->
                 <div class="panel">
                     <div class="panel-head">
                         <strong>Danh sách</strong>
@@ -721,7 +724,6 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
                     </div>
                 </div>
 
-                <!-- RIGHT: DETAILS -->
                 <div class="panel" id="detailPanel">
                     <div class="panel-head">
                         <strong>Chi tiết lịch khám</strong>
@@ -746,7 +748,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
 
                             <div class="actions">
                                 <button class="btn btn-primary" onclick="editSelected()">✏️ Sửa</button>
-                                <button class="btn btn-danger" onclick="deleteSelected()">🗑️ Xóa</button>
+                                <button class="btn btn-danger" onclick="cancelSelected()">🚫 Hủy lịch</button>
                             </div>
 
                             <div class="tabs">
@@ -775,10 +777,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
     </main>
 </div>
 
-<!-- Toast -->
 <div class="toast-wrap" id="toastWrap"></div>
 
-<!-- Modal: ADD/EDIT -->
 <div class="modal-backdrop" id="formModal">
     <div class="modal">
         <div class="modal-head">
@@ -859,10 +859,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
     </div>
 </div>
 
-
-
 <script>
-/* ===== Toast ===== */
 function toast(message, type='success'){
     const wrap = document.getElementById('toastWrap');
     const el = document.createElement('div');
@@ -900,12 +897,10 @@ function toDatetimeLocalValue(iso){
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/* ===== State ===== */
 let selectedId = null;
 let selectedCache = null;
 let listCache = [];
 
-/* ===== Tabs ===== */
 function switchTab(which){
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     const tabs = document.querySelectorAll('.tab');
@@ -916,7 +911,6 @@ function switchTab(which){
     document.getElementById('tab-record').style.display = (which === 'record') ? '' : 'none';
 }
 
-/* ===== Filters ===== */
 const searchInput = document.getElementById('searchInput');
 const statusFilter = document.getElementById('statusFilter');
 const fromDate = document.getElementById('fromDate');
@@ -944,7 +938,6 @@ function debounce(fn, ms){
     }
 }
 
-/* ===== List render ===== */
 function pillClass(st){
     st = String(st||'');
     if (st === 'Chờ khám') return 'pending';
@@ -1012,7 +1005,6 @@ function loadList(){
             `);
         });
 
-        // nếu đang có selectedId mà row đã không còn trong list => clear
         if (selectedId && !listCache.some(x => Number(x.appointment_id) === Number(selectedId))) {
             clearSelection();
         }
@@ -1020,7 +1012,6 @@ function loadList(){
     .catch(() => toast('Lỗi kết nối server!', 'error'));
 }
 
-/* ===== Select + detail ===== */
 function clearSelection(){
     selectedId = null;
     selectedCache = null;
@@ -1035,7 +1026,6 @@ function selectRow(id){
     const row = document.getElementById('row-' + id);
     if (row) row.classList.add('selected');
 
-    // default tab
     switchTab('info');
 
     fetch('appointments.php?action=detail', {
@@ -1125,7 +1115,6 @@ function renderRecordRx(r, rxs){
     rxWrap.innerHTML = html;
 }
 
-/* ===== Form modal (Add/Edit) ===== */
 const formModal = document.getElementById('formModal');
 const deptSel = document.getElementById('department');
 const docSel  = document.getElementById('doctor');
@@ -1136,7 +1125,6 @@ function showAddModal(){
     document.getElementById('appointment_id').value = '';
     docSel.innerHTML = `<option value="">Chọn bác sĩ</option>`;
 
-    // min datetime = now (gần đúng)
     const now = new Date();
     const pad = n => String(n).padStart(2,'0');
     const minVal = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
@@ -1172,7 +1160,6 @@ function loadDoctorsByDepartment(deptId, selectedDoctorId=null){
 }
 deptSel.addEventListener('change', () => loadDoctorsByDepartment(deptSel.value));
 
-/* Submit add/edit */
 document.getElementById('apptForm').addEventListener('submit', function(e){
     e.preventDefault();
 
@@ -1189,11 +1176,9 @@ document.getElementById('apptForm').addEventListener('submit', function(e){
         closeForm();
         loadList();
 
-        // nếu vừa add => auto open
         if (action === 'add' && res.appointment_id) {
             setTimeout(() => selectRow(Number(res.appointment_id)), 250);
         }
-        // nếu edit => refresh detail
         if (action === 'edit' && selectedId) {
             setTimeout(() => selectRow(Number(selectedId)), 250);
         }
@@ -1201,7 +1186,6 @@ document.getElementById('apptForm').addEventListener('submit', function(e){
     .catch(()=>toast('Lỗi kết nối server!', 'error'));
 });
 
-/* ===== Edit / Delete / Status on detail ===== */
 function editSelected(){
     if (!selectedCache || !selectedCache.appointment) return toast('Chưa chọn lịch!', 'error');
     const a = selectedCache.appointment;
@@ -1218,59 +1202,25 @@ function editSelected(){
     formModal.style.display = 'flex';
 }
 
-function deleteSelected(){
+function cancelSelected(){
     if (!selectedId) return toast('Chưa chọn lịch!', 'error');
-    if (!confirm('Xóa lịch khám #' + selectedId + ' ?')) return;
+    if (!confirm('Bạn có chắc muốn hủy lịch khám #' + selectedId + ' ?')) return;
 
-    fetch('appointments.php?action=delete', {
+    fetch('appointments.php?action=cancel', {
         method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:`appointment_id=${encodeURIComponent(selectedId)}`
     })
     .then(r=>r.json())
     .then(res=>{
-        toast(res.message || (res.success ? 'Đã xóa' : 'Xóa thất bại'), res.success ? 'success' : 'error');
+        toast(res.message || (res.success ? 'Đã hủy lịch' : 'Thất bại'), res.success ? 'success' : 'error');
         if (!res.success) return;
-        selectedId = null;
-        selectedCache = null;
-        clearSelection();
-        loadList();
-    })
-    .catch(()=>toast('Lỗi kết nối server!', 'error'));
-}
-
-/* Status modal */
-const statusModal = document.getElementById('statusModal');
-function showStatusModal(){
-    if (!selectedCache || !selectedCache.appointment) return toast('Chưa chọn lịch!', 'error');
-    const st = selectedCache.appointment.status || 'Chờ khám';
-    document.getElementById('statusNew').value = st;
-    statusModal.style.display = 'flex';
-}
-function closeStatusModal(){ statusModal.style.display = 'none'; }
-
-function saveStatus(){
-    if (!selectedId) return toast('Chưa chọn lịch!', 'error');
-    const st = document.getElementById('statusNew').value;
-
-    fetch('appointments.php?action=change_status', {
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:`appointment_id=${encodeURIComponent(selectedId)}&status=${encodeURIComponent(st)}`
-    })
-    .then(r=>r.json())
-    .then(res=>{
-        toast(res.message || (res.success ? 'Đã cập nhật' : 'Thất bại'), res.success ? 'success' : 'error');
-        if (!res.success) return;
-        closeStatusModal();
-        // refresh list + detail
         loadList();
         setTimeout(() => selectRow(Number(selectedId)), 200);
     })
     .catch(()=>toast('Lỗi kết nối server!', 'error'));
 }
 
-/* ===== Init ===== */
 loadList();
 </script>
 

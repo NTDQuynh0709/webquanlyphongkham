@@ -35,17 +35,16 @@ function enc_field(?string $v): ?string {
     if ($v === null) return null;
     $v = (string)$v;
     if ($v === '') return '';
-    return encrypt_text($v);
+    return encrypt_text($v); // từ giờ lưu theo key mới
 }
 function dec_field(?string $v): ?string {
     if ($v === null) return null;
     $v = (string)$v;
     if ($v === '') return '';
     try {
-        return decrypt_text($v);
+        return decrypt_text_auto($v);
     } catch (Throwable $e) {
-        // fallback plaintext nếu data cũ chưa mã hoá
-        return $v;
+        return '[Không thể giải mã dữ liệu]';
     }
 }
 

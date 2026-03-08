@@ -62,7 +62,6 @@ $admin_initial = mb_substr($admin_name, 0, 1, 'UTF-8');
  */
 function loadAppointmentBundle(PDO $conn, int $patient_id): array {
     try {
-        // 1) Lịch khám + join bác sĩ + khoa
         $stmt = $conn->prepare("
             SELECT a.*,
                    d.full_name AS doctor_name,
@@ -81,7 +80,6 @@ function loadAppointmentBundle(PDO $conn, int $patient_id): array {
         $apptIds = array_map(fn($x) => (int)$x['appointment_id'], $appts);
         $in = implode(',', array_fill(0, count($apptIds), '?'));
 
-        // 3) medical_records
         $stmt = $conn->prepare("
             SELECT mr.*,
                    d.full_name AS doctor_name
@@ -109,7 +107,6 @@ function loadAppointmentBundle(PDO $conn, int $patient_id): array {
         }
         $recordIds = array_values(array_unique($recordIds));
 
-        // 4) prescriptions
         $rxByRecord = [];
 
         if ($recordIds) {
@@ -160,14 +157,15 @@ function loadAppointmentBundle(PDO $conn, int $patient_id): array {
             }
         }
 
-        // 5) merge
         $out = [];
         foreach ($appts as $a) {
             $aid = (int)$a['appointment_id'];
             $rec = $recordByAppt[$aid] ?? null;
 
             $rxs = [];
-            if ($rec && !empty($rec['record_id'])) $rxs = $rxByRecord[(int)$rec['record_id']] ?? [];
+            if ($rec && !empty($rec['record_id'])) {
+                $rxs = $rxByRecord[(int)$rec['record_id']] ?? [];
+            }
 
             $out[] = [
                 'appointment'   => $a,
@@ -177,7 +175,6 @@ function loadAppointmentBundle(PDO $conn, int $patient_id): array {
         }
 
         return ['ok' => true, 'message' => '', 'rows' => $out];
-
     } catch (PDOException $e) {
         return ['ok' => false, 'message' => 'DB Error: ' . $e->getMessage(), 'rows' => []];
     }
@@ -460,7 +457,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
 
                 echo json_encode(['success' => true, 'message' => 'Cập nhật kết quả khám thành công (đã lưu log)!']);
                 exit;
-
             } catch (Throwable $e) {
                 $conn->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Lỗi cập nhật: ' . $e->getMessage()]);
@@ -490,7 +486,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             exit;
         }
 
-        // GET ALL AUDITS (tổng hợp toàn bộ)
+        // GET ALL AUDITS
         if ($action === 'get_all_audits') {
             $st = $conn->query("
                 SELECT *
@@ -505,7 +501,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
 
         echo json_encode(['success' => false, 'message' => 'Action không hợp lệ!']);
         exit;
-
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => 'DB Error: ' . $e->getMessage()]);
         exit;
@@ -536,11 +531,25 @@ try {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-    --bg:#f5f7fa;--card:#fff;--text:#111827;--muted:#6b7280;--line:#eef2f7;
-    --primary:#667eea;--primary2:#764ba2;--shadow:0 6px 18px rgba(17,24,39,0.06);
-    --radius:16px;--danger:#dc2626;
+    --bg:#f5f7fa;
+    --card:#fff;
+    --text:#111827;
+    --muted:#6b7280;
+    --line:#eef2f7;
+    --primary:#667eea;
+    --primary2:#764ba2;
+    --shadow:0 6px 18px rgba(17,24,39,0.06);
+    --radius:16px;
+    --danger:#dc2626;
+    --success:#16a34a;
+    --soft:#f8fafc;
+    --soft2:#f3f6fb;
 }
-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg);color:var(--text)}
+body{
+    font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+}
 .header{
     background:linear-gradient(135deg,var(--primary) 0%, var(--primary2) 100%);
     color:#fff;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;gap:14px;
@@ -583,16 +592,19 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg
 .sub{color:var(--muted);font-size:13px;margin-top:4px}
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .btn{
-    display:inline-flex;align-items:center;gap:8px;padding:9px 12px;border-radius:12px;font-weight:900;font-size:13px;
-    text-decoration:none;border:1px solid transparent;cursor:pointer;white-space:nowrap;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:12px;font-weight:900;font-size:13px;
+    text-decoration:none;border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:.2s ease;
 }
-.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
-.btn-primary:hover{filter:brightness(.97)}
+.btn-primary{
+    background:linear-gradient(135deg,var(--primary),var(--primary2));
+    color:#fff;border:none;box-shadow:0 10px 24px rgba(102,126,234,0.25);
+}
+.btn-primary:hover{transform:translateY(-1px);filter:brightness(.98)}
 .btn-light{background:#f9fafb;color:#111827;border-color:#e5e7eb}
 .btn-light:hover{background:#f3f4f6}
 
 .search{
-    padding:10px 12px;border-radius:12px;border:1px solid #e5e7eb;font-weight:700;font-size:13px;min-width:260px;
+    padding:10px 12px;border-radius:12px;border:1px solid #e5e7eb;font-weight:700;font-size:13px;min-width:260px;background:#fff;
 }
 .search:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(102,126,234,0.18)}
 
@@ -613,25 +625,36 @@ tbody tr.selected{background:#f0f2ff !important}
 .empty .ico{font-size:40px;margin-bottom:10px;opacity:.75}
 
 /* Modal */
-.modal-backdrop{position:fixed;inset:0;background:rgba(17,24,39,0.45);display:none;align-items:center;justify-content:center;z-index:1000;padding:18px}
+.modal-backdrop{
+    position:fixed;inset:0;background:rgba(17,24,39,0.5);display:none;align-items:center;justify-content:center;z-index:1000;padding:18px;
+    backdrop-filter:blur(4px);
+}
 .modal{
     width:100%;
     max-width:980px;
     background:#fff;
-    border-radius:18px;
+    border-radius:22px;
     overflow:hidden;
-    box-shadow:0 18px 50px rgba(0,0,0,0.2);
+    box-shadow:0 24px 60px rgba(0,0,0,0.22);
     max-height:88vh;
     display:flex;
     flex-direction:column;
+    animation:popIn .18s ease;
+}
+@keyframes popIn{
+    from{opacity:0;transform:translateY(12px) scale(.985)}
+    to{opacity:1;transform:translateY(0) scale(1)}
 }
 .modal-head{
     padding:16px 18px;border-bottom:1px solid var(--line);
     display:flex;justify-content:space-between;align-items:center;gap:10px;
     position:sticky;top:0;background:#fff;z-index:2;
 }
-.modal-head h3{font-size:16px;font-weight:900}
-.xbtn{border:1px solid #e5e7eb;background:#fff;border-radius:12px;padding:8px 10px;font-weight:900;cursor:pointer}
+.modal-head h3{font-size:17px;font-weight:900}
+.xbtn{
+    border:1px solid #e5e7eb;background:#fff;border-radius:12px;padding:8px 10px;font-weight:900;cursor:pointer;transition:.2s;
+}
+.xbtn:hover{background:#f8fafc}
 .modal-body{padding:16px 18px;overflow:auto;}
 .modal-foot{
     padding:14px 18px;border-top:1px solid var(--line);
@@ -655,15 +678,20 @@ tbody tr.selected{background:#f0f2ff !important}
 
 .notice{padding:12px;border-radius:14px;border:1px dashed #e5e7eb;background:#fafafa;color:#374151;font-weight:800;line-height:1.6}
 
-/* ===== LỊCH SỬ KHÁM (TABLE giống hình 2) ===== */
-.appt-table{width:100%;border-collapse:collapse;}
-.appt-table th,.appt-table td{padding:12px 14px;border-bottom:1px solid #f1f5f9;text-align:left;font-size:14px;vertical-align:top}
-.appt-table th{background:#fafafa;font-weight:1000;color:#111827}
-.appt-pill{
-    display:inline-flex;align-items:center;gap:8px;
-    padding:6px 10px;border-radius:999px;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;
-    font-size:12px;font-weight:900;white-space:nowrap;
+/* ===== LỊCH SỬ KHÁM GỌN ===== */
+.appt-table{width:100%;border-collapse:collapse;table-layout:auto}
+.appt-table th,.appt-table td{
+    padding:12px 14px;border-bottom:1px solid #f1f5f9;text-align:left;font-size:14px;vertical-align:middle
 }
+.appt-table th{background:#fafafa;font-weight:1000;color:#111827}
+.appt-summary{display:flex;flex-direction:column;gap:4px}
+.appt-main{font-weight:900;color:#111827}
+.appt-sub{color:#6b7280;font-size:12px;font-weight:800;line-height:1.5}
+.appt-status{
+    display:inline-flex;align-items:center;padding:5px 10px;border-radius:999px;border:1px solid #dbeafe;background:#eff6ff;color:#1d4ed8;
+    font-size:12px;font-weight:900;
+}
+.appt-status.none{background:#f8fafc;border-color:#e5e7eb;color:#6b7280}
 .btn-view{
     display:inline-flex;align-items:center;justify-content:center;gap:8px;
     padding:9px 12px;border-radius:12px;background:var(--primary);color:#fff;text-decoration:none;
@@ -675,14 +703,27 @@ tbody tr.selected{background:#f0f2ff !important}
 .mini-btn.primary{background:#f0f2ff;border-color:rgba(102,126,234,0.35);color:var(--primary)}
 .mini-pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:900;border:1px solid #e5e7eb;background:#fff;color:#374151}
 
+.detail-row td{
+    background:#fcfcfd;
+    padding:0;
+}
+.appt-detail{
+    padding:14px;
+    border-top:1px dashed #e5e7eb;
+}
+.block-title{
+    font-size:13px;
+    font-weight:1000;
+    color:#111827;
+    margin-bottom:8px;
+}
 .kq, .rxbox{border:1px solid #eef2f7;border-radius:14px;padding:12px;background:#fff;}
 .kq .meta, .rxrow .meta{color:var(--muted);font-weight:800;font-size:12px}
-.kq .desc{margin-top:10px;color:#111827;font-weight:800;white-space:pre-wrap;line-height:1.65}
 .kq-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
 @media(max-width:720px){.kq-grid{grid-template-columns:1fr}}
 .kq-chip{border:1px solid #eef2f7;border-radius:12px;padding:10px;background:#fff}
 .kq-chip .t{color:var(--muted);font-size:11px;font-weight:1000;text-transform:uppercase;letter-spacing:.4px}
-.kq-chip .v{margin-top:6px;font-weight:1000;color:#111827}
+.kq-chip .v{margin-top:6px;font-weight:1000;color:#111827;white-space:pre-wrap;line-height:1.6}
 
 .rxbox{margin-top:10px;background:#fff}
 .rxrow{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0;border-bottom:1px dashed #e5e7eb}
@@ -713,6 +754,128 @@ tbody tr.selected{background:#f0f2ff !important}
 .log-reason{margin-top:6px;color:#111827;font-weight:800}
 .log-mini{margin-top:8px;color:var(--muted);font-size:12px;font-weight:800}
 .log-actions{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+
+/* ===== FORM BỆNH NHÂN ===== */
+.form-shell{display:grid;gap:18px}
+.form-hero{
+    background:linear-gradient(135deg,#eef2ff 0%, #f5f3ff 100%);
+    border:1px solid #e8edff;
+    border-radius:18px;
+    padding:18px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    flex-wrap:wrap;
+}
+.form-hero-left{display:flex;align-items:center;gap:14px}
+.form-hero-icon{
+    width:56px;height:56px;border-radius:18px;display:grid;place-items:center;font-size:24px;background:#fff;color:var(--primary);
+    box-shadow:0 10px 24px rgba(102,126,234,0.12);
+}
+.form-hero h4{font-size:18px;font-weight:900;color:#111827}
+.form-hero p{margin-top:4px;font-size:13px;font-weight:700;color:#6b7280}
+.form-badge{
+    display:inline-flex;align-items:center;gap:8px;padding:9px 12px;border-radius:999px;background:#fff;border:1px solid #dbe4ff;
+    color:var(--primary);font-weight:900;font-size:12px;
+}
+.form-sections{display:grid;gap:16px}
+.form-card{
+    border:1px solid #edf2f7;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(15,23,42,0.03);
+}
+.form-card-head{
+    padding:14px 16px;border-bottom:1px solid #f1f5f9;background:#fbfcff;display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.form-card-head h5{font-size:14px;font-weight:900;color:#111827}
+.form-card-head span{font-size:12px;color:#6b7280;font-weight:800}
+.form-card-body{padding:16px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.form-grid{grid-template-columns:1fr}}
+.field{display:flex;flex-direction:column;gap:8px}
+.field.full{grid-column:1 / -1}
+.field label{
+    font-size:13px;font-weight:900;color:#111827;display:flex;align-items:center;gap:8px;
+}
+.field label .req{color:#ef4444}
+.field small{color:#6b7280;font-size:12px;font-weight:700;margin-top:-2px}
+.input-wrap{position:relative}
+.input-icon{
+    position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px;opacity:.72;pointer-events:none;
+}
+.field input,
+.field select,
+.field textarea{
+    width:100%;border:1px solid #dfe7f1;background:#fff;color:#111827;border-radius:14px;padding:13px 14px;font-size:14px;font-weight:700;transition:.2s ease;
+}
+.field input.with-icon{padding-left:42px}
+.field textarea{min-height:110px;resize:vertical;line-height:1.6}
+.field input:hover,
+.field select:hover,
+.field textarea:hover{border-color:#cad5e3}
+.field input:focus,
+.field select:focus,
+.field textarea:focus{
+    outline:none;border-color:var(--primary);box-shadow:0 0 0 4px rgba(102,126,234,0.14);background:#fff;
+}
+.gender-pills{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:640px){.gender-pills{grid-template-columns:1fr}}
+.gender-option{position:relative}
+.gender-option input{position:absolute;opacity:0;pointer-events:none}
+.gender-label{
+    display:flex;align-items:center;gap:10px;justify-content:center;border:1px solid #dfe7f1;background:#fff;padding:12px 14px;border-radius:14px;cursor:pointer;
+    transition:.2s ease;font-weight:900;color:#374151;
+}
+.gender-label:hover{border-color:#cbd5e1;background:#fafcff}
+.gender-option input:checked + .gender-label{
+    border-color:rgba(102,126,234,.45);background:#eef2ff;color:var(--primary);box-shadow:0 8px 22px rgba(102,126,234,.12);
+}
+.form-note{
+    padding:12px 14px;background:#f8fafc;border:1px dashed #dbe3ee;border-radius:14px;color:#475569;font-size:13px;font-weight:800;line-height:1.6;
+}
+.form-actions-left{
+    margin-right:auto;color:#6b7280;font-size:12px;font-weight:800;
+}
+
+/* ===== FORM SỬA KẾT QUẢ KHÁM ===== */
+.record-form-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:14px;
+}
+@media(max-width:820px){
+    .record-form-grid{
+        grid-template-columns:1fr;
+    }
+}
+.record-section{
+    border:1px solid #eef2f7;
+    border-radius:16px;
+    background:#fff;
+    overflow:hidden;
+}
+.record-section-head{
+    padding:12px 14px;
+    background:#fafbff;
+    border-bottom:1px solid #eef2f7;
+    font-weight:1000;
+    color:#111827;
+    font-size:13px;
+}
+.record-section-body{
+    padding:14px;
+    display:grid;
+    gap:12px;
+}
+.record-preview{
+    padding:10px 12px;
+    border-radius:12px;
+    background:#f8fafc;
+    border:1px dashed #dbe3ee;
+    color:#475569;
+    font-size:12px;
+    font-weight:800;
+    line-height:1.6;
+}
 </style>
 </head>
 <body>
@@ -738,7 +901,7 @@ tbody tr.selected{background:#f0f2ff !important}
             <li class="nav-item" onclick="window.location.href='doctors.php'"><span class="icon">👨‍⚕️</span>Bác sĩ</li>
             <li class="nav-item active" onclick="window.location.href='patients.php'"><span class="icon">👥</span>Bệnh nhân</li>
             <li class="nav-item" onclick="window.location.href='appointments.php'"><span class="icon">📅</span>Lịch khám</li>
-            <li class="nav-item " onclick="window.location.href='receptionists.php'"><span class="icon">👩‍💼</span>Lễ tân</li>
+            <li class="nav-item" onclick="window.location.href='receptionists.php'"><span class="icon">👩‍💼</span>Lễ tân</li>
         </ul>
     </aside>
 
@@ -791,18 +954,17 @@ tbody tr.selected{background:#f0f2ff !important}
                     </tbody>
                 </table>
             </div>
-
         </section>
     </main>
 </div>
 
 <div class="toast-wrap" id="toastWrap"></div>
 
-<!-- ✅ MODAL: LOG TỔNG HỢP -->
+<!-- MODAL: LOG TỔNG HỢP -->
 <div class="modal-backdrop" id="allLogModal">
     <div class="modal" style="max-width:980px">
         <div class="modal-head">
-            <h3>🕒 LOG tổng hợp </h3>
+            <h3>🕒 LOG tổng hợp</h3>
             <button class="xbtn" onclick="closeAllLog()">✖️ Đóng</button>
         </div>
         <div class="modal-body">
@@ -820,7 +982,7 @@ tbody tr.selected{background:#f0f2ff !important}
     </div>
 </div>
 
-<!-- Modal: DETAIL -->
+<!-- MODAL: DETAIL -->
 <div class="modal-backdrop" id="detailModal">
     <div class="modal">
         <div class="modal-head">
@@ -854,7 +1016,7 @@ tbody tr.selected{background:#f0f2ff !important}
 
             <div id="tab-appt" style="display:none">
                 <div class="panel">
-                    <h4>Danh sách lịch khám</h4>
+                    <h4>Lịch sử khám bệnh</h4>
                     <div id="apptWrap"></div>
                 </div>
             </div>
@@ -862,9 +1024,9 @@ tbody tr.selected{background:#f0f2ff !important}
     </div>
 </div>
 
-<!-- Modal: ADD/EDIT -->
+<!-- MODAL: ADD/EDIT PATIENT -->
 <div class="modal-backdrop" id="formModal">
-    <div class="modal" style="max-width:760px">
+    <div class="modal" style="max-width:840px">
         <div class="modal-head">
             <h3 id="formTitle">Thêm bệnh nhân</h3>
             <button class="xbtn" onclick="closeForm()">✖️ Đóng</button>
@@ -873,46 +1035,185 @@ tbody tr.selected{background:#f0f2ff !important}
         <form id="patientForm" class="modal-body">
             <input type="hidden" name="patient_id" id="patient_id" />
 
-            <div class="form-grid">
-                <div class="field">
-                    <label>Họ tên *</label>
-                    <input type="text" name="full_name" id="full_name" required />
+            <div class="form-shell">
+                <div class="form-hero">
+                    <div class="form-hero-left">
+                        <div class="form-hero-icon">🩺</div>
+                        <div>
+                            <h4 id="formHeroTitle">Hồ sơ bệnh nhân</h4>
+                            <p>Nhập đầy đủ thông tin cơ bản để tạo hoặc cập nhật hồ sơ bệnh nhân.</p>
+                        </div>
+                    </div>
+                    <div class="form-badge">🔒 Dữ liệu được lưu an toàn</div>
                 </div>
-                <div class="field">
-                    <label>SĐT *</label>
-                    <input type="tel" name="phone" id="phone" required />
-                </div>
-            </div>
 
-            <div class="form-grid">
-                <div class="field">
-                    <label>Ngày sinh *</label>
-                    <input type="date" name="date_of_birth" id="date_of_birth" required />
-                </div>
-                <div class="field">
-                    <label>Giới tính</label>
-                    <select name="gender" id="gender">
-                        <option value="">Chọn</option>
-                        <option value="Male">Nam</option>
-                        <option value="Female">Nữ</option>
-                    </select>
-                </div>
-            </div>
+                <div class="form-sections">
+                    <div class="form-card">
+                        <div class="form-card-head">
+                            <h5>Thông tin cơ bản</h5>
+                            <span>Thông tin bắt buộc để quản lý hồ sơ</span>
+                        </div>
+                        <div class="form-card-body">
+                            <div class="form-grid">
+                                <div class="field">
+                                    <label>Họ tên <span class="req">*</span></label>
+                                    <div class="input-wrap">
+                                        <span class="input-icon">👤</span>
+                                        <input class="with-icon" type="text" name="full_name" id="full_name" placeholder="Nhập họ và tên bệnh nhân" required />
+                                    </div>
+                                    <small>Ví dụ: Nguyễn Văn A</small>
+                                </div>
 
-            <div class="field">
-                <label>Địa chỉ</label>
-                <textarea name="address" id="address" placeholder="(tuỳ chọn)"></textarea>
-            </div>
+                                <div class="field">
+                                    <label>Số điện thoại <span class="req">*</span></label>
+                                    <div class="input-wrap">
+                                        <span class="input-icon">📞</span>
+                                        <input class="with-icon" type="tel" name="phone" id="phone" placeholder="Nhập số điện thoại" required />
+                                    </div>
+                                    <small>Dùng để tra cứu và liên hệ bệnh nhân</small>
+                                </div>
 
-            <div class="field">
-                <label>Tiền sử bệnh (medical_history)</label>
-                <textarea name="medical_history" id="medical_history" placeholder="Ví dụ: dị ứng thuốc, bệnh nền..."></textarea>
+                                <div class="field">
+                                    <label>Ngày sinh <span class="req">*</span></label>
+                                    <input type="date" name="date_of_birth" id="date_of_birth" required />
+                                    <small>Giúp xác định độ tuổi và hồ sơ y tế phù hợp</small>
+                                </div>
+
+                                <div class="field">
+                                    <label>Giới tính</label>
+                                    <div class="gender-pills">
+                                        <div class="gender-option">
+                                            <input type="radio" name="gender" id="gender_empty" value="" checked>
+                                            <label class="gender-label" for="gender_empty">⚪ Chưa chọn</label>
+                                        </div>
+                                        <div class="gender-option">
+                                            <input type="radio" name="gender" id="gender_male" value="Male">
+                                            <label class="gender-label" for="gender_male">👨 Nam</label>
+                                        </div>
+                                        <div class="gender-option">
+                                            <input type="radio" name="gender" id="gender_female" value="Female">
+                                            <label class="gender-label" for="gender_female">👩 Nữ</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-card">
+                        <div class="form-card-head">
+                            <h5>Thông tin bổ sung</h5>
+                            <span>Không bắt buộc nhưng nên có</span>
+                        </div>
+                        <div class="form-card-body">
+                            <div class="form-grid">
+                                <div class="field full">
+                                    <label>Địa chỉ</label>
+                                    <textarea name="address" id="address" placeholder="Nhập địa chỉ hiện tại của bệnh nhân..."></textarea>
+                                    <small>Có thể để trống nếu chưa có thông tin</small>
+                                </div>
+
+                                <div class="field full">
+                                    <label>Tiền sử bệnh / dị ứng / bệnh nền</label>
+                                    <textarea name="medical_history" id="medical_history" placeholder="Ví dụ: Dị ứng penicillin, tiền sử cao huyết áp, tiểu đường..."></textarea>
+                                    <small>Thông tin này sẽ được mã hóa trước khi lưu</small>
+                                </div>
+                            </div>
+
+                            <div class="form-note">
+                                💡 Gợi ý: Nên nhập rõ các thông tin như bệnh nền, dị ứng thuốc hoặc tiền sử phẫu thuật để hỗ trợ bác sĩ trong các lần khám tiếp theo.
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </form>
 
         <div class="modal-foot">
+            <div class="form-actions-left">Các trường có dấu <span style="color:#ef4444">*</span> là bắt buộc</div>
             <button class="btn btn-light" onclick="closeForm()">Hủy</button>
-            <button class="btn btn-primary" onclick="submitPatientForm()">💾 Lưu</button>
+            <button class="btn btn-primary" onclick="submitPatientForm()">💾 Lưu bệnh nhân</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: EDIT RECORD -->
+<div class="modal-backdrop" id="recordModal">
+    <div class="modal" style="max-width:920px">
+        <div class="modal-head">
+            <h3>✏️ Sửa kết quả khám</h3>
+            <button class="xbtn" onclick="closeRecordModal()">✖️ Đóng</button>
+        </div>
+
+        <form id="recordForm" class="modal-body">
+            <input type="hidden" id="record_id_edit" name="record_id">
+
+            <div class="record-preview" id="recordPreview">
+                Đang chuẩn bị dữ liệu...
+            </div>
+
+            <div class="record-form-grid" style="margin-top:14px;">
+                <div class="record-section">
+                    <div class="record-section-head">📋 Nội dung khám</div>
+                    <div class="record-section-body">
+                        <div class="field">
+                            <label>Lý do chỉnh sửa <span class="req">*</span></label>
+                            <textarea id="reason_edit" name="reason" placeholder="Nhập lý do chỉnh sửa để lưu log..." required></textarea>
+                        </div>
+
+                        <div class="field">
+                            <label>Chẩn đoán</label>
+                            <textarea id="diagnosis_edit" name="diagnosis" placeholder="Nhập chẩn đoán..."></textarea>
+                        </div>
+
+                        <div class="field">
+                            <label>Phác đồ điều trị</label>
+                            <textarea id="treatment_plan_edit" name="treatment_plan" placeholder="Nhập phác đồ điều trị..."></textarea>
+                        </div>
+
+                        <div class="field">
+                            <label>Ghi chú</label>
+                            <textarea id="notes_edit" name="notes" placeholder="Ghi chú thêm..."></textarea>
+                        </div>
+
+                        <div class="field">
+                            <label>Ghi chú đơn thuốc</label>
+                            <textarea id="rx_note_edit" name="rx_note" placeholder="Ghi chú trên đơn thuốc..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="record-section">
+                    <div class="record-section-head">❤️ Dấu hiệu sinh tồn</div>
+                    <div class="record-section-body">
+                        <div class="field">
+                            <label>Huyết áp</label>
+                            <input type="text" id="blood_pressure_edit" name="blood_pressure" placeholder="Ví dụ: 120/80" />
+                        </div>
+                        <div class="field">
+                            <label>Nhịp tim</label>
+                            <input type="text" id="heart_rate_edit" name="heart_rate" placeholder="Ví dụ: 80" />
+                        </div>
+                        <div class="field">
+                            <label>Nhiệt độ</label>
+                            <input type="text" id="temperature_edit" name="temperature" placeholder="Ví dụ: 36.8" />
+                        </div>
+                        <div class="field">
+                            <label>Chiều cao</label>
+                            <input type="text" id="height_edit" name="height" placeholder="Ví dụ: 170" />
+                        </div>
+                        <div class="field">
+                            <label>Cân nặng</label>
+                            <input type="text" id="weight_edit" name="weight" placeholder="Ví dụ: 65" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <div class="modal-foot">
+            <button class="btn btn-light" onclick="closeRecordModal()">Hủy</button>
+            <button class="btn btn-primary" onclick="submitRecordForm()">💾 Lưu kết quả khám</button>
         </div>
     </div>
 </div>
@@ -972,17 +1273,36 @@ function switchTab(e, id){
 
 const detailModal = document.getElementById('detailModal');
 const formModal = document.getElementById('formModal');
+const recordModal = document.getElementById('recordModal');
+
 let currentDetailId = null;
 let currentDetailCache = null;
 
+function setGenderValue(value){
+    const empty = document.getElementById('gender_empty');
+    const male = document.getElementById('gender_male');
+    const female = document.getElementById('gender_female');
+
+    empty.checked = false;
+    male.checked = false;
+    female.checked = false;
+
+    if (value === 'Male') male.checked = true;
+    else if (value === 'Female') female.checked = true;
+    else empty.checked = true;
+}
+
 function showAddModal(){
     document.getElementById('formTitle').textContent = 'Thêm bệnh nhân';
+    document.getElementById('formHeroTitle').textContent = 'Tạo hồ sơ bệnh nhân mới';
     document.getElementById('patientForm').reset();
     document.getElementById('patient_id').value = '';
+    setGenderValue('');
     formModal.style.display = 'flex';
 }
 function closeForm(){ formModal.style.display = 'none'; }
 function closeDetail(){ detailModal.style.display = 'none'; currentDetailId = null; currentDetailCache = null; }
+function closeRecordModal(){ recordModal.style.display = 'none'; }
 
 function openDetail(patientId){
     currentDetailId = patientId;
@@ -1023,58 +1343,85 @@ function openDetail(patientId){
     .catch(() => toast('Lỗi kết nối server!', 'error'));
 }
 
-/* ===== Toggle row details in table ===== */
+/* ===== Toggle detail row ===== */
 function toggleAppt(aid){
+    document.querySelectorAll('.detail-row').forEach(row => {
+        if (row.id !== 'appt-body-' + aid) row.style.display = 'none';
+    });
+
+    document.querySelectorAll('[data-toggle]').forEach(btn => {
+        if (String(btn.getAttribute('data-toggle')) !== String(aid)) {
+            btn.textContent = 'Xem chi tiết';
+        }
+    });
+
     const tr = document.getElementById('appt-body-' + aid);
     if (!tr) return;
+
     const isOpen = tr.style.display !== 'none';
     tr.style.display = isOpen ? 'none' : '';
     const btn = document.querySelector(`[data-toggle="${aid}"]`);
-    if (btn) btn.textContent = isOpen ? 'Xem' : 'Ẩn';
+    if (btn) btn.textContent = isOpen ? 'Xem chi tiết' : 'Ẩn chi tiết';
 }
 
-/* ===== admin edit record (prompt) ===== */
-function adminEditRecord(record_id, diagnosis, treatment_plan, notes, blood_pressure, heart_rate, temperature, height, weight, rx_note){
-    record_id = Number(record_id || 0);
-    if (!record_id) return toast('Không có record_id!', 'error');
+/* ===== Modal sửa kết quả khám ===== */
+function openRecordEditModal(payload){
+    document.getElementById('recordForm').reset();
 
-    const reason = prompt('Lý do chỉnh sửa (bắt buộc):');
-    if (!reason || !reason.trim()) return;
+    document.getElementById('record_id_edit').value = payload.record_id || '';
+    document.getElementById('reason_edit').value = '';
+    document.getElementById('diagnosis_edit').value = payload.diagnosis || '';
+    document.getElementById('treatment_plan_edit').value = payload.treatment_plan || '';
+    document.getElementById('notes_edit').value = payload.notes || '';
+    document.getElementById('blood_pressure_edit').value = payload.blood_pressure || '';
+    document.getElementById('heart_rate_edit').value = payload.heart_rate || '';
+    document.getElementById('temperature_edit').value = payload.temperature || '';
+    document.getElementById('height_edit').value = payload.height || '';
+    document.getElementById('weight_edit').value = payload.weight || '';
+    document.getElementById('rx_note_edit').value = payload.rx_note || '';
 
-    const d = prompt('Chẩn đoán:', diagnosis ?? '') ?? (diagnosis ?? '');
-    const tp = prompt('Phác đồ:', treatment_plan ?? '') ?? (treatment_plan ?? '');
-    const nt = prompt('Ghi chú:', notes ?? '') ?? (notes ?? '');
+    document.getElementById('recordPreview').innerHTML = `
+        <b>record #${escapeHtml(payload.record_id || '')}</b>
+        ${payload.exam_time ? ` • ${escapeHtml(payload.exam_time)}` : ''}
+        ${payload.doctor_name ? ` • Bác sĩ: ${escapeHtml(payload.doctor_name)}` : ''}
+    `;
 
-    const bp = prompt('Huyết áp:', blood_pressure ?? '') ?? (blood_pressure ?? '');
-    const hr = prompt('Nhịp tim:', heart_rate ?? '') ?? (heart_rate ?? '');
-    const temp = prompt('Nhiệt độ:', temperature ?? '') ?? (temperature ?? '');
-    const h = prompt('Chiều cao:', height ?? '') ?? (height ?? '');
-    const w = prompt('Cân nặng:', weight ?? '') ?? (weight ?? '');
+    recordModal.style.display = 'flex';
+}
+function submitRecordForm(){
+    document.getElementById('recordForm').requestSubmit();
+}
 
-    const rx = prompt('Ghi chú đơn thuốc:', rx_note ?? '') ?? (rx_note ?? '');
+document.getElementById('recordForm').addEventListener('submit', function(e){
+    e.preventDefault();
 
-    const fd = new FormData();
-    fd.append('record_id', record_id);
-    fd.append('reason', reason);
-    fd.append('diagnosis', d);
-    fd.append('treatment_plan', tp);
-    fd.append('notes', nt);
-    fd.append('blood_pressure', bp);
-    fd.append('heart_rate', hr);
-    fd.append('temperature', temp);
-    fd.append('height', h);
-    fd.append('weight', w);
-    fd.append('rx_note', rx);
+    const reason = document.getElementById('reason_edit').value.trim();
+    const recordId = document.getElementById('record_id_edit').value;
+
+    if (!recordId) {
+        toast('Không có record_id!', 'error');
+        return;
+    }
+    if (!reason) {
+        toast('Vui lòng nhập lý do chỉnh sửa!', 'error');
+        document.getElementById('reason_edit').focus();
+        return;
+    }
+
+    const fd = new FormData(this);
 
     fetch('patients.php?action=update_record', { method:'POST', body: fd })
       .then(r => r.json())
       .then(data => {
           toast(data.message || 'Done', data.success ? 'success' : 'error');
-          if (data.success && currentDetailId) openDetail(currentDetailId);
-          if (data.success) loadAllAudits(); // refresh list in modal cache
+          if (!data.success) return;
+
+          closeRecordModal();
+          if (currentDetailId) openDetail(currentDetailId);
+          loadAllAudits();
       })
       .catch(() => toast('Lỗi kết nối server!', 'error'));
-}
+});
 
 function adminViewAudits(record_id){
     record_id = Number(record_id || 0);
@@ -1102,7 +1449,7 @@ function adminViewAudits(record_id){
       .catch(() => toast('Lỗi kết nối server!', 'error'));
 }
 
-/* ===== render lịch sử khám dạng TABLE (giống hình 2) ===== */
+/* ===== render lịch sử khám gọn ===== */
 function renderAppointmentBundle(pack){
     const wrap = document.getElementById('apptWrap');
     wrap.innerHTML = '';
@@ -1118,16 +1465,15 @@ function renderAppointmentBundle(pack){
         return;
     }
 
-    // table head
     let html = `
       <div class="table-wrap">
         <table class="appt-table">
           <thead>
             <tr>
-              <th style="width:220px">Thời gian khám</th>
-              <th style="width:220px">Ngày hẹn</th>
-              <th>Dấu hiệu sinh tồn</th>
-              <th style="width:220px">Thao tác</th>
+              <th style="width:180px">Ngày khám</th>
+              <th>Bác sĩ / Khoa</th>
+              <th style="width:160px">Kết quả</th>
+              <th style="width:150px">Thao tác</th>
             </tr>
           </thead>
           <tbody>
@@ -1146,59 +1492,76 @@ function renderAppointmentBundle(pack){
         const symptoms = a.symptoms || '';
 
         const examRaw = r ? (r.examination_date || r.created_at || '') : '';
-        const examTime = examRaw ? formatDateTime(examRaw) : '—';
+        const examTime = examRaw ? formatDateTime(examRaw) : '';
+        const hasRecord = !!r;
 
-        const bp = r && r.blood_pressure ? r.blood_pressure : '—';
-        const hr = r && (r.heart_rate ?? '') !== '' ? (r.heart_rate + ' bpm') : '—';
-        const temp = r && (r.temperature ?? '') !== '' ? (r.temperature + '°C') : '—';
+        let resultStatus = `<span class="appt-status none">Chưa có</span>`;
+        if (hasRecord) resultStatus = `<span class="appt-status">Đã khám</span>`;
 
-        // detail block
         let recordHtml = '';
         if (!r) {
-            recordHtml = `<div class="notice">Chưa có kết quả khám (medical_records) cho lịch này.</div>`;
+            recordHtml = `<div class="notice">Chưa có kết quả khám cho lịch này.</div>`;
         } else {
             let rxNote = '';
             if (rxs && rxs.length && rxs[0] && rxs[0].header && rxs[0].header.note) rxNote = rxs[0].header.note;
 
-            const jsRid = Number(r.record_id || 0);
-            const jsDiag = JSON.stringify(r.diagnosis || '');
-            const jsTp = JSON.stringify(r.treatment_plan || '');
-            const jsNotes = JSON.stringify(r.notes || '');
-            const jsBp = JSON.stringify(r.blood_pressure || '');
-            const jsHr = JSON.stringify((r.heart_rate ?? '') + '');
-            const jsTemp = JSON.stringify((r.temperature ?? '') + '');
-            const jsH = JSON.stringify((r.height ?? '') + '');
-            const jsW = JSON.stringify((r.weight ?? '') + '');
-            const jsRx = JSON.stringify(rxNote || '');
+            const payload = {
+                record_id: Number(r.record_id || 0),
+                diagnosis: r.diagnosis || '',
+                treatment_plan: r.treatment_plan || '',
+                notes: r.notes || '',
+                blood_pressure: r.blood_pressure || '',
+                heart_rate: String(r.heart_rate ?? ''),
+                temperature: String(r.temperature ?? ''),
+                height: String(r.height ?? ''),
+                weight: String(r.weight ?? ''),
+                rx_note: rxNote || '',
+                exam_time: examTime || '',
+                doctor_name: r.doctor_name || doctor || ''
+            };
 
             recordHtml = `
                 <div class="kq">
                     <div class="block-title">📋 Kết quả khám</div>
-                    <div class="meta">${escapeHtml(r.examination_date || r.created_at || '')}${r.doctor_name ? (' • 👨‍⚕️ ' + escapeHtml(r.doctor_name)) : ''}</div>
+                    <div class="meta">
+                        ${escapeHtml(r.examination_date || r.created_at || '')}
+                        ${r.doctor_name ? (' • 👨‍⚕️ ' + escapeHtml(r.doctor_name)) : ''}
+                    </div>
 
                     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                        <button class="mini-btn" onclick="adminEditRecord(${jsRid}, ${jsDiag}, ${jsTp}, ${jsNotes}, ${jsBp}, ${jsHr}, ${jsTemp}, ${jsH}, ${jsW}, ${jsRx})">✏️ Sửa kết quả</button>
-                        <button class="mini-btn" onclick="adminViewAudits(${jsRid})">🕒 Log record</button>
+                        <button class="mini-btn" type="button" onclick='openRecordEditModal(${JSON.stringify(payload)})'>✏️ Sửa kết quả</button>
+                        <button class="mini-btn" type="button" onclick="adminViewAudits(${Number(r.record_id || 0)})">🕒 Log record</button>
                         <span class="mini-pill">record #${escapeHtml(r.record_id)}</span>
                     </div>
 
                     <div class="kq-grid">
-                        <div class="kq-chip"><div class="t">Chẩn đoán</div><div class="v">${escapeHtml(r.diagnosis || 'N/A')}</div></div>
-                        <div class="kq-chip"><div class="t">Phác đồ</div><div class="v">${escapeHtml(r.treatment_plan || 'N/A')}</div></div>
-                        <div class="kq-chip"><div class="t">Ghi chú</div><div class="v">${escapeHtml(r.notes || 'N/A')}</div></div>
-                        <div class="kq-chip"><div class="t">Dấu hiệu sinh tồn</div><div class="v">
-                            HA: ${escapeHtml(r.blood_pressure || 'N/A')} • HR: ${escapeHtml(r.heart_rate ?? 'N/A')} • T: ${escapeHtml(r.temperature ?? 'N/A')}<br>
-                            Cao: ${escapeHtml(r.height ?? 'N/A')} • Nặng: ${escapeHtml(r.weight ?? 'N/A')}
-                        </div></div>
+                        <div class="kq-chip">
+                            <div class="t">Chẩn đoán</div>
+                            <div class="v">${escapeHtml(r.diagnosis || 'N/A')}</div>
+                        </div>
+                        <div class="kq-chip">
+                            <div class="t">Phác đồ</div>
+                            <div class="v">${escapeHtml(r.treatment_plan || 'N/A')}</div>
+                        </div>
+                        <div class="kq-chip">
+                            <div class="t">Ghi chú</div>
+                            <div class="v">${escapeHtml(r.notes || 'N/A')}</div>
+                        </div>
+                        <div class="kq-chip">
+                            <div class="t">Dấu hiệu sinh tồn</div>
+                            <div class="v">
+                                HA: ${escapeHtml(r.blood_pressure || 'N/A')} • HR: ${escapeHtml(r.heart_rate ?? 'N/A')} • T: ${escapeHtml(r.temperature ?? 'N/A')}<br>
+                                Cao: ${escapeHtml(r.height ?? 'N/A')} • Nặng: ${escapeHtml(r.weight ?? 'N/A')}
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
         }
 
-        // Rx html
         let rxHtml = '';
         if (!r) {
-            rxHtml = `<div class="notice" style="margin-top:10px">Chưa có đơn thuốc vì chưa có kết quả khám.</div>`;
+            rxHtml = '';
         } else if (!rxs.length) {
             rxHtml = `<div class="notice" style="margin-top:10px">Chưa có đơn thuốc cho kết quả khám này.</div>`;
         } else {
@@ -1231,31 +1594,32 @@ function renderAppointmentBundle(pack){
             });
         }
 
-        const apptPill = `<span class="appt-pill">🩺 ${escapeHtml(examTime)}</span>`;
-        const apptInfo = `<div class="meta" style="margin-top:6px;color:#6b7280;font-weight:800;font-size:12px;line-height:1.5">
-            👨‍⚕️ ${escapeHtml(doctor)} • 🏥 ${escapeHtml(dept)} ${status ? ('• <b>' + escapeHtml(status) + '</b>') : ''}
-            ${symptoms ? ('<div style="margin-top:6px"><b>Triệu chứng:</b> ' + escapeHtml(symptoms) + '</div>') : ''}
-        </div>`;
-
         html += `
           <tr>
             <td>
-              ${apptPill}
-              ${apptInfo}
-            </td>
-            <td class="muted">${escapeHtml(apptTime)}</td>
-            <td class="muted">
-              HA: <b>${escapeHtml(bp)}</b> • HR: <b>${escapeHtml(hr)}</b> • T: <b>${escapeHtml(temp)}</b>
+                <div class="appt-summary">
+                    <div class="appt-main">${escapeHtml(apptTime)}</div>
+                    <div class="appt-sub">Mã lịch #${escapeHtml(aid)}</div>
+                </div>
             </td>
             <td>
-              <button class="mini-btn primary" data-toggle="${escapeHtml(aid)}" onclick="toggleAppt('${escapeHtml(aid)}')">Xem</button>
-              <span class="mini-pill">#${escapeHtml(aid)}</span>
+                <div class="appt-summary">
+                    <div class="appt-main">👨‍⚕️ ${escapeHtml(doctor)}</div>
+                    <div class="appt-sub">🏥 ${escapeHtml(dept)} ${status ? ('• ' + escapeHtml(status)) : ''}</div>
+                </div>
+            </td>
+            <td>${resultStatus}</td>
+            <td>
+              <button class="mini-btn primary" type="button" data-toggle="${escapeHtml(aid)}" onclick="toggleAppt('${escapeHtml(aid)}')">Xem chi tiết</button>
             </td>
           </tr>
-          <tr id="appt-body-${escapeHtml(aid)}" style="display:none;">
-            <td colspan="4" style="background:#fcfcfd;">
-              ${recordHtml}
-              ${rxHtml}
+          <tr id="appt-body-${escapeHtml(aid)}" class="detail-row" style="display:none;">
+            <td colspan="4">
+              <div class="appt-detail">
+                ${symptoms ? `<div class="notice" style="margin-bottom:10px"><b>Triệu chứng:</b> ${escapeHtml(symptoms)}</div>` : ''}
+                ${recordHtml}
+                ${rxHtml}
+              </div>
             </td>
           </tr>
         `;
@@ -1270,11 +1634,12 @@ function openEditFromDetail(){
     const p = currentDetailCache.patient;
 
     document.getElementById('formTitle').textContent = 'Sửa bệnh nhân';
+    document.getElementById('formHeroTitle').textContent = 'Cập nhật hồ sơ bệnh nhân';
     document.getElementById('patient_id').value = p.patient_id || '';
     document.getElementById('full_name').value = p.full_name || '';
     document.getElementById('phone').value = p.phone || '';
     document.getElementById('date_of_birth').value = p.date_of_birth || '';
-    document.getElementById('gender').value = p.gender || '';
+    setGenderValue(p.gender || '');
     document.getElementById('address').value = p.address || '';
     document.getElementById('medical_history').value = p.medical_history || '';
 
@@ -1340,7 +1705,7 @@ function updateRowInTable(p){
 }
 
 /* =========================
-   ✅ LOG tổng hợp: 1 nút -> popup
+   LOG tổng hợp
 ========================= */
 const allLogModal = document.getElementById('allLogModal');
 const allLogList = document.getElementById('allLogList');
@@ -1357,6 +1722,15 @@ function closeAllLog(){
 
 allLogModal.addEventListener('click', (e) => {
     if (e.target === allLogModal) closeAllLog();
+});
+formModal.addEventListener('click', (e) => {
+    if (e.target === formModal) closeForm();
+});
+detailModal.addEventListener('click', (e) => {
+    if (e.target === detailModal) closeDetail();
+});
+recordModal.addEventListener('click', (e) => {
+    if (e.target === recordModal) closeRecordModal();
 });
 
 function auditToText(x){

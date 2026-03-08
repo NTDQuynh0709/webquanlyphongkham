@@ -23,6 +23,17 @@ function j($data, int $code=200){
   exit;
 }
 
+/* ================= AUTO CANCEL EXPIRED ================= */
+function autoCancelExpiredAppointments(PDO $conn): void {
+  $stmt = $conn->prepare("
+    UPDATE appointments
+    SET status = 'cancelled'
+    WHERE status = 'pending'
+      AND DATE(appointment_date) < CURDATE()
+  ");
+  $stmt->execute();
+}
+
 function appts(PDO $conn, string $ymd): array {
   $stmt = $conn->prepare("
     SELECT a.appointment_id, a.appointment_date, a.symptoms, a.status,
@@ -45,6 +56,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])) {
   $action = (string)$_POST['action'];
 
   try {
+    // luôn tự động hủy các lịch quá ngày trước khi xử lý
+    autoCancelExpiredAppointments($conn);
+
     if ($action === 'list') {
       $date = (string)($_POST['date'] ?? $today);
       if (!preg_match('/^\d{4}-\d{2}-\d{2}$/',$date)) $date = $today;
@@ -56,7 +70,6 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])) {
       $id=(int)($_POST['appointment_id']??0);
       if ($id<=0) j(['ok'=>false,'message'=>'ID không hợp lệ'],422);
 
-      // Không cho hủy nếu đã completed
       $stmt = $conn->prepare("SELECT status FROM appointments WHERE appointment_id=?");
       $stmt->execute([$id]);
       $status = $stmt->fetchColumn();
@@ -67,7 +80,6 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])) {
         j(['ok'=>false,'message'=>'Không thể hủy lịch đã hoàn thành'],422);
       }
 
-      // Nếu đã cancelled rồi thì thôi
       if ($status === 'cancelled') {
         j(['ok'=>true,'message'=>'Lịch đã được hủy trước đó']);
       }
@@ -85,6 +97,13 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])) {
 }
 
 /* ================= PAGE DATA ================= */
+// khi mở trang cũng tự động cập nhật trạng thái
+try {
+  autoCancelExpiredAppointments($conn);
+} catch (Exception $e) {
+  // bỏ qua để tránh vỡ trang
+}
+
 $todayItems = appts($conn,$today);
 ?>
 <!DOCTYPE html>
@@ -187,11 +206,11 @@ $todayItems = appts($conn,$today);
   </div>
 
   <div class="nav">
-  <a href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
-  <a class="active" href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
-  <a href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
-  <a href="profile.php"><i class="fas fa-id-badge"></i> Hồ sơ lễ tân</a>
-</div>
+    <a href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
+    <a class="active" href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
+    <a href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
+    <a href="profile.php"><i class="fas fa-id-badge"></i> Hồ sơ lễ tân</a>
+  </div>
 
   <div class="card">
     <div class="toolbar">
@@ -209,7 +228,13 @@ $todayItems = appts($conn,$today);
       <table>
         <thead>
           <tr>
-            <th>Ngày</th><th>Bệnh nhân</th><th>SĐT</th><th>Khoa</th><th>Bác sĩ</th><th>Trạng thái</th><th>Thao tác</th>
+            <th>Ngày</th>
+            <th>Bệnh nhân</th>
+            <th>SĐT</th>
+            <th>Khoa</th>
+            <th>Bác sĩ</th>
+            <th>Trạng thái</th>
+            <th>Thao tác</th>
           </tr>
         </thead>
         <tbody id="listBody"></tbody>
