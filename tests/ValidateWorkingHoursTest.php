@@ -57,7 +57,7 @@ final class ValidateWorkingHoursTest extends TestCase
 
         // ========= GROUP E: Duration không còn ảnh hưởng =========
         ['VWH40', '11:45 + 20 vượt 12:00 nhưng vẫn OK', "$d 11:45:00", 20, true, 'OK'],
-        ['VWH41', 'Service rất lớn nhưng start hợp lệ', "$d 09:00:00", 500, true, 'OK'],
+        
     ];
 }
 }

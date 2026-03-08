@@ -10,12 +10,17 @@ if ($admin_id <= 0) {
     exit;
 }
 
-
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function genderText($g) { return ($g === 'Female') ? 'Nữ' : 'Nam'; }
-function statusText($is_deleted) { return ((int)$is_deleted === 0) ? 'Đang hoạt động' : 'Đã ẩn'; }
 
-// ===== HEADER ADMIN (GIỐNG DASHBOARD) =====
+function statusText($status) {
+    $status = (int)$status;
+    if ($status === 1) return 'Đang làm';
+    if ($status === 2) return 'Tạm ngưng';
+    return 'Đã nghỉ';
+}
+
+// ===== HEADER ADMIN =====
 $admin_id = (int)$_SESSION['admin_id'];
 
 $admin = null;
@@ -34,8 +39,8 @@ if (!$admin) {
     ];
 }
 
-$admin_name   = $admin['full_name'] ?? 'Admin';
-$admin_email  = $admin['email'] ?? '';
+$admin_name    = $admin['full_name'] ?? 'Admin';
+$admin_email   = $admin['email'] ?? '';
 $admin_initial = mb_substr($admin_name, 0, 1, 'UTF-8');
 
 /* =========================
@@ -56,19 +61,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $email = trim($_POST['email'] ?? '');
             $username = trim($_POST['username'] ?? '');
             $password = (string)($_POST['password'] ?? '');
+            $status = (int)($_POST['status'] ?? 1);
+
+            if (!in_array($status, [0, 1, 2], true)) $status = 1;
 
             if ($full_name === '' || $email === '' || $username === '' || $password === '') {
                 echo json_encode(['success' => false, 'message' => 'Vui lòng nhập đầy đủ Họ tên, Email, Username, Mật khẩu!']);
                 exit;
             }
 
-            // Trùng email/username (chỉ kiểm tra user chưa bị delete)
+            // Trùng email/username
             $stmt = $conn->prepare("
                 SELECT COUNT(*) FROM receptionists
                 WHERE (email = :email OR username = :username)
-                AND is_deleted = 0
             ");
-            $stmt->execute(['email' => $email, 'username' => $username]);
+            $stmt->execute([
+                'email' => $email,
+                'username' => $username
+            ]);
             if ((int)$stmt->fetchColumn() > 0) {
                 echo json_encode(['success' => false, 'message' => 'Email hoặc username đã tồn tại!']);
                 exit;
@@ -77,8 +87,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $hashed_password = password_hash($password, PASSWORD_BCRYPT);
 
             $stmt = $conn->prepare("
-                INSERT INTO receptionists (full_name, gender, phone, email, username, password, is_deleted, created_at)
-                VALUES (:full_name, :gender, :phone, :email, :username, :password, 0, NOW())
+                INSERT INTO receptionists (
+                    full_name, gender, phone, email, username, password, status, created_at
+                )
+                VALUES (
+                    :full_name, :gender, :phone, :email, :username, :password, :status, NOW()
+                )
             ");
             $stmt->execute([
                 'full_name' => $full_name,
@@ -86,7 +100,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 'phone' => $phone,
                 'email' => $email,
                 'username' => $username,
-                'password' => $hashed_password
+                'password' => $hashed_password,
+                'status' => $status
             ]);
 
             $receptionist_id = (int)$conn->lastInsertId();
@@ -100,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 'phone' => $phone,
                 'email' => $email,
                 'username' => $username,
-                'is_deleted' => 0,
+                'status' => $status,
                 'created_at' => date('Y-m-d H:i:s')
             ];
         }
@@ -114,6 +129,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $email = trim($_POST['email'] ?? '');
             $username = trim($_POST['username'] ?? '');
             $password = (string)($_POST['password'] ?? '');
+            $status = (int)($_POST['status'] ?? 1);
+
+            if (!in_array($status, [0, 1, 2], true)) $status = 1;
 
             if ($receptionist_id <= 0 || $full_name === '' || $email === '' || $username === '') {
                 echo json_encode(['success' => false, 'message' => 'Thiếu dữ liệu cập nhật!']);
@@ -125,7 +143,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 SELECT COUNT(*) FROM receptionists
                 WHERE (email = :email OR username = :username)
                 AND receptionist_id != :receptionist_id
-                AND is_deleted = 0
             ");
             $stmt->execute([
                 'email' => $email,
@@ -138,20 +155,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             }
 
             // check tồn tại
-            $stmt = $conn->prepare("SELECT receptionist_id FROM receptionists WHERE receptionist_id=:id AND is_deleted=0");
+            $stmt = $conn->prepare("SELECT receptionist_id FROM receptionists WHERE receptionist_id = :id");
             $stmt->execute(['id' => $receptionist_id]);
             if (!$stmt->fetchColumn()) {
-                echo json_encode(['success' => false, 'message' => 'Lễ tân không tồn tại hoặc đã bị ẩn!']);
+                echo json_encode(['success' => false, 'message' => 'Lễ tân không tồn tại!']);
                 exit;
             }
 
             $sql = "
                 UPDATE receptionists SET
-                    full_name=:full_name,
-                    gender=:gender,
-                    phone=:phone,
-                    email=:email,
-                    username=:username
+                    full_name = :full_name,
+                    gender = :gender,
+                    phone = :phone,
+                    email = :email,
+                    username = :username,
+                    status = :status
             ";
             $params = [
                 'full_name' => $full_name,
@@ -159,15 +177,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 'phone' => $phone,
                 'email' => $email,
                 'username' => $username,
+                'status' => $status,
                 'id' => $receptionist_id
             ];
 
             if ($password !== '') {
-                $sql .= ", password=:password";
+                $sql .= ", password = :password";
                 $params['password'] = password_hash($password, PASSWORD_BCRYPT);
             }
 
-            $sql .= " WHERE receptionist_id=:id AND is_deleted=0";
+            $sql .= " WHERE receptionist_id = :id";
 
             $stmt = $conn->prepare($sql);
             $stmt->execute($params);
@@ -181,19 +200,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 'phone' => $phone,
                 'email' => $email,
                 'username' => $username,
-                'is_deleted' => 0
+                'status' => $status
             ];
         }
 
-        // ===== RESTORE (bỏ ẩn) =====
-        if ($action === 'restore') {
+        // ===== CHANGE STATUS =====
+        if ($action === 'change_status') {
             $receptionist_id = (int)($_POST['receptionist_id'] ?? 0);
+            $status = (int)($_POST['status'] ?? 1);
+
+            if (!in_array($status, [0, 1, 2], true)) $status = 1;
+
             if ($receptionist_id <= 0) {
                 echo json_encode(['success' => false, 'message' => 'Thiếu receptionist_id!']);
                 exit;
             }
 
-            $stmt = $conn->prepare("SELECT full_name FROM receptionists WHERE receptionist_id=:id");
+            $stmt = $conn->prepare("SELECT full_name FROM receptionists WHERE receptionist_id = :id");
             $stmt->execute(['id' => $receptionist_id]);
             $name = $stmt->fetchColumn();
 
@@ -202,37 +225,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 exit;
             }
 
-            $stmt = $conn->prepare("UPDATE receptionists SET is_deleted=0 WHERE receptionist_id=:id");
-            $stmt->execute(['id' => $receptionist_id]);
+            $stmt = $conn->prepare("UPDATE receptionists SET status = :status WHERE receptionist_id = :id");
+            $stmt->execute([
+                'status' => $status,
+                'id' => $receptionist_id
+            ]);
 
             $response['success'] = true;
-            $response['message'] = 'Đã bỏ ẩn lễ tân.';
-            $response['receptionist'] = ['receptionist_id' => $receptionist_id, 'is_deleted' => 0];
-        }
-
-        // ===== DELETE (ẩn) =====
-        if ($action === 'delete') {
-            $receptionist_id = (int)($_POST['receptionist_id'] ?? 0);
-            if ($receptionist_id <= 0) {
-                echo json_encode(['success' => false, 'message' => 'Thiếu receptionist_id!']);
-                exit;
-            }
-
-            $stmt = $conn->prepare("SELECT full_name FROM receptionists WHERE receptionist_id=:id AND is_deleted=0");
-            $stmt->execute(['id' => $receptionist_id]);
-            $name = $stmt->fetchColumn();
-
-            if ($name === false) {
-                echo json_encode(['success' => false, 'message' => 'Lễ tân không tồn tại hoặc đã bị ẩn!']);
-                exit;
-            }
-
-            $stmt = $conn->prepare("UPDATE receptionists SET is_deleted=1 WHERE receptionist_id=:id");
-            $stmt->execute(['id' => $receptionist_id]);
-
-            $response['success'] = true;
-            $response['message'] = 'Đã ẩn lễ tân.';
-            $response['receptionist'] = ['receptionist_id' => $receptionist_id, 'is_deleted' => 1];
+            $response['message'] = 'Đã cập nhật trạng thái lễ tân thành công!';
+            $response['receptionist'] = [
+                'receptionist_id' => $receptionist_id,
+                'status' => $status
+            ];
         }
 
         echo json_encode($response);
@@ -246,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
    PAGE DATA
 ========================= */
 $stmt = $conn->query("
-    SELECT receptionist_id, full_name, gender, phone, email, username, is_deleted, created_at
+    SELECT receptionist_id, full_name, gender, phone, email, username, status, created_at
     FROM receptionists
     ORDER BY created_at DESC
 ");
@@ -362,8 +366,6 @@ $total = count($receptionists);
     .btn-primary:hover{filter:brightness(.97)}
     .btn-light{background:#f9fafb;color:#111827;border-color:#e5e7eb}
     .btn-light:hover{background:#f3f4f6}
-    .btn-danger{background:#dc2626;color:#fff;border-color:#dc2626}
-    .btn-danger:hover{filter:brightness(.98)}
 
     .search{
         padding:10px 12px;border-radius:12px;border:1px solid #e5e7eb;
@@ -418,6 +420,7 @@ $total = count($receptionists);
         background:#fff;
     }
     .dot{width:8px;height:8px;border-radius:999px;background:#16a34a}
+    .dot.pause{background:#f59e0b}
     .dot.off{background:#dc2626}
 
     .detail-top{
@@ -497,7 +500,6 @@ $total = count($receptionists);
         <div class="avatar"><?php echo h($admin_initial); ?></div>
         <div class="meta">
             <strong><?php echo h($admin_name); ?></strong>
-           
         </div>
         <a class="logout" href="../logout.php">🚪 Đăng xuất</a>
     </div>
@@ -529,7 +531,6 @@ $total = count($receptionists);
             </div>
 
             <div class="content-grid">
-                <!-- LEFT: LIST -->
                 <div class="panel">
                     <div class="panel-head">
                         <strong>Danh sách</strong>
@@ -552,7 +553,7 @@ $total = count($receptionists);
                             <?php else: ?>
                                 <?php foreach ($receptionists as $r): ?>
                                     <?php
-                                        $is_deleted = (int)($r['is_deleted'] ?? 0);
+                                        $status = isset($r['status']) ? (int)$r['status'] : 1;
                                         $contact = trim(($r['phone'] ?? '') . ' • ' . ($r['email'] ?? ''), " \t\n\r\0\x0B•");
                                         if ($contact === '') $contact = 'N/A';
                                     ?>
@@ -565,7 +566,7 @@ $total = count($receptionists);
                                             'phone' => $r['phone'] ?? '',
                                             'email' => $r['email'] ?? '',
                                             'username' => $r['username'] ?? '',
-                                            'is_deleted' => $is_deleted,
+                                            'status' => $status,
                                             'created_at' => $r['created_at'] ?? null,
                                         ], JSON_UNESCAPED_UNICODE)); ?>'
                                     >
@@ -574,8 +575,14 @@ $total = count($receptionists);
                                         <td><?php echo h($contact); ?></td>
                                         <td>
                                             <span class="status-pill">
-                                                <span class="dot <?php echo ($is_deleted === 0) ? '' : 'off'; ?>"></span>
-                                                <?php echo h(statusText($is_deleted)); ?>
+                                                <?php if ($status === 1): ?>
+                                                    <span class="dot"></span>
+                                                <?php elseif ($status === 2): ?>
+                                                    <span class="dot pause"></span>
+                                                <?php else: ?>
+                                                    <span class="dot off"></span>
+                                                <?php endif; ?>
+                                                <?php echo h(statusText($status)); ?>
                                             </span>
                                         </td>
                                     </tr>
@@ -586,7 +593,6 @@ $total = count($receptionists);
                     </div>
                 </div>
 
-                <!-- RIGHT: DETAILS -->
                 <div class="panel" id="detailPanel">
                     <div class="panel-head">
                         <strong>Chi tiết lễ tân</strong>
@@ -617,13 +623,11 @@ $total = count($receptionists);
 
                             <div class="actions">
                                 <button class="btn btn-primary" onclick="editSelected()">✏️ Sửa</button>
-                                <button class="btn btn-primary" id="toggleBtn" onclick="toggleDeleted()">🔁 Ẩn/Bỏ ẩn</button>
-                                <button class="btn btn-danger" onclick="showDeleteConfirmSelected()">🗑️ Ẩn</button>
+                                <button class="btn btn-primary" onclick="openStatusModal()">🔁 Cập nhật trạng thái</button>
                             </div>
                         </div>
                     </div>
                 </div>
-
             </div>
         </section>
     </main>
@@ -648,34 +652,43 @@ $total = count($receptionists);
                     <input type="text" id="full_name" name="full_name" required>
                 </div>
                 <div class="field">
-                    <label>Giới tính</label>
-                    <select id="gender" name="gender">
-                        <option value="Male">Nam</option>
-                        <option value="Female">Nữ</option>
+                    <label>Trạng thái</label>
+                    <select id="status" name="status">
+                        <option value="1">Đang làm</option>
+                        <option value="2">Tạm ngưng</option>
+                        <option value="0">Đã nghỉ</option>
                     </select>
                 </div>
             </div>
 
             <div class="grid">
                 <div class="field">
-                    <label>Số điện thoại</label>
-                    <input type="text" id="phone" name="phone" placeholder="VD: 0909xxxxxx">
+                    <label>Giới tính</label>
+                    <select id="gender" name="gender">
+                        <option value="Male">Nam</option>
+                        <option value="Female">Nữ</option>
+                    </select>
                 </div>
                 <div class="field">
-                    <label>Email *</label>
-                    <input type="email" id="email" name="email" required>
+                    <label>Số điện thoại</label>
+                    <input type="text" id="phone" name="phone" placeholder="VD: 0909xxxxxx">
                 </div>
             </div>
 
             <div class="grid">
                 <div class="field">
+                    <label>Email *</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+                <div class="field">
                     <label>Username *</label>
                     <input type="text" id="username" name="username" required>
                 </div>
-                <div class="field">
-                    <label>Mật khẩu <span id="pwHint" class="muted">(bắt buộc khi thêm)</span></label>
-                    <input type="password" id="password" name="password">
-                </div>
+            </div>
+
+            <div class="field">
+                <label>Mật khẩu <span id="pwHint" class="muted">(bắt buộc khi thêm)</span></label>
+                <input type="password" id="password" name="password">
             </div>
         </form>
 
@@ -686,25 +699,32 @@ $total = count($receptionists);
     </div>
 </div>
 
-<!-- Modal Delete Confirm -->
-<div class="modal-backdrop" id="deleteConfirmModal">
-    <div class="modal" style="max-width:440px;">
+<!-- Modal Status -->
+<div class="modal-backdrop" id="statusModal">
+    <div class="modal" style="max-width:420px;">
         <div class="modal-head">
-            <h3>Xác nhận</h3>
-            <button class="btn btn-light" onclick="closeDeleteConfirm()" title="Đóng">✖️ Đóng</button>
+            <h3>Cập nhật trạng thái lễ tân</h3>
+            <button class="btn btn-light" onclick="closeStatusModal()" title="Đóng">✖️ Đóng</button>
         </div>
         <div class="modal-body">
-            <p id="deleteConfirmMessage" style="color:#374151;font-weight:800;line-height:1.5"></p>
+            <input type="hidden" id="status_receptionist_id">
+            <div class="field">
+                <label>Trạng thái</label>
+                <select id="status_select">
+                    <option value="1">Đang làm</option>
+                    <option value="2">Tạm ngưng</option>
+                    <option value="0">Đã nghỉ</option>
+                </select>
+            </div>
         </div>
         <div class="modal-foot">
-            <button class="btn btn-light" onclick="closeDeleteConfirm()">Hủy</button>
-            <button class="btn btn-danger" id="confirmDeleteBtn">Ẩn</button>
+            <button class="btn btn-light" onclick="closeStatusModal()">Hủy</button>
+            <button class="btn btn-primary" onclick="submitStatusChange()">Lưu trạng thái</button>
         </div>
     </div>
 </div>
 
 <script>
-/* ===== Toast ===== */
 function toast(message, type = 'success') {
     const wrap = document.getElementById('toastWrap');
     const el = document.createElement('div');
@@ -725,16 +745,34 @@ function toast(message, type = 'success') {
 function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 }
+
 function genderText(g){ return g === 'Female' ? 'Nữ' : 'Nam'; }
-function statusPill(is_deleted){
-    const off = Number(is_deleted) === 1;
-    return `<span class="status-pill"><span class="dot ${off ? 'off' : ''}"></span>${off ? 'Đã ẩn' : 'Đang hoạt động'}</span>`;
+
+function statusTextLocal(status){
+    status = Number(status);
+    if (status === 1) return 'Đang làm';
+    if (status === 2) return 'Tạm ngưng';
+    return 'Đã nghỉ';
 }
 
-/* ===== State ===== */
+function statusPill(status){
+    status = Number(status);
+    let cls = 'off';
+    let text = 'Đã nghỉ';
+
+    if (status === 1) {
+        cls = '';
+        text = 'Đang làm';
+    } else if (status === 2) {
+        cls = 'pause';
+        text = 'Tạm ngưng';
+    }
+
+    return `<span class="status-pill"><span class="dot ${cls}"></span>${text}</span>`;
+}
+
 let selectedId = null;
 
-/* ===== Row helpers ===== */
 function getRowById(id){ return document.getElementById('receptionist-' + id); }
 function getDataFromRow(row){ return row ? JSON.parse(row.dataset.receptionist) : null; }
 
@@ -757,17 +795,14 @@ function selectRow(tr){
     const init = (r.full_name || 'LT').trim().charAt(0).toUpperCase();
     document.getElementById('detailAva').textContent = init || 'LT';
     document.getElementById('detailName').textContent = r.full_name || '';
-    document.getElementById('detailSub').textContent = (Number(r.is_deleted) === 1) ? 'Đã ẩn' : 'Đang hoạt động';
+    document.getElementById('detailSub').textContent = statusTextLocal(r.status);
 
     document.getElementById('d_id').textContent = '#' + r.receptionist_id;
-    document.getElementById('d_status').innerHTML = statusPill(r.is_deleted);
+    document.getElementById('d_status').innerHTML = statusPill(r.status);
     document.getElementById('d_gender').textContent = genderText(r.gender);
     document.getElementById('d_phone').textContent = r.phone || 'N/A';
     document.getElementById('d_email').textContent = r.email || 'N/A';
     document.getElementById('d_username').textContent = r.username || 'N/A';
-
-    const btn = document.getElementById('toggleBtn');
-    btn.textContent = (Number(r.is_deleted) === 1) ? '🔁 Bỏ ẩn' : '🔁 Ẩn';
 }
 
 function clearSelection(){
@@ -783,76 +818,53 @@ function getSelected(){
     return getDataFromRow(row);
 }
 
-/* ===== Actions ===== */
 function editSelected(){
     const r = getSelected();
     if(!r) return toast('Chưa chọn lễ tân!', 'error');
     openEdit(r.receptionist_id);
 }
 
-function toggleDeleted(){
+const statusModal = document.getElementById('statusModal');
+
+function openStatusModal(){
     const r = getSelected();
     if(!r) return toast('Chưa chọn lễ tân!', 'error');
 
-    const nextAction = (Number(r.is_deleted) === 1) ? 'restore' : 'delete';
+    document.getElementById('status_receptionist_id').value = r.receptionist_id;
+    document.getElementById('status_select').value = String(r.status ?? 1);
+    statusModal.style.display = 'flex';
+}
 
-    fetch(`receptionists.php?action=${nextAction}`, {
+function closeStatusModal(){
+    statusModal.style.display = 'none';
+}
+
+function submitStatusChange(){
+    const receptionistId = document.getElementById('status_receptionist_id').value;
+    const status = document.getElementById('status_select').value;
+
+    fetch('receptionists.php?action=change_status', {
         method: 'POST',
         headers: {'Content-Type':'application/x-www-form-urlencoded'},
-        body: `receptionist_id=${encodeURIComponent(r.receptionist_id)}`
+        body: `receptionist_id=${encodeURIComponent(receptionistId)}&status=${encodeURIComponent(status)}`
     })
     .then(r => r.json())
     .then(data => {
         toast(data.message, data.success ? 'success' : 'error');
         if(!data.success) return;
 
-        const row = getRowById(selectedId);
+        const row = getRowById(receptionistId);
         const payload = getDataFromRow(row);
-        payload.is_deleted = (nextAction === 'delete') ? 1 : 0;
+        payload.status = Number(status);
         row.dataset.receptionist = JSON.stringify(payload);
+        row.children[3].innerHTML = statusPill(status);
 
-        row.children[3].innerHTML = statusPill(payload.is_deleted);
         selectRow(row);
+        closeStatusModal();
     })
     .catch(() => toast('Lỗi kết nối server!', 'error'));
 }
 
-function showDeleteConfirmSelected(){
-    const r = getSelected();
-    if(!r) return toast('Chưa chọn lễ tân!', 'error');
-
-    document.getElementById('deleteConfirmMessage').textContent =
-        `Bạn có chắc chắn muốn ẨN lễ tân "${r.full_name}"? (Có thể bỏ ẩn lại sau)`;
-    document.getElementById('confirmDeleteBtn').onclick = () => hardHide(r.receptionist_id);
-    document.getElementById('deleteConfirmModal').style.display = 'flex';
-}
-
-function hardHide(id){
-    fetch('receptionists.php?action=delete', {
-        method: 'POST',
-        headers: {'Content-Type':'application/x-www-form-urlencoded'},
-        body: `receptionist_id=${encodeURIComponent(id)}`
-    })
-    .then(r => r.json())
-    .then(data => {
-        toast(data.message, data.success ? 'success' : 'error');
-        if(!data.success) return;
-
-        const row = getRowById(id);
-        const payload = getDataFromRow(row);
-        payload.is_deleted = 1;
-        row.dataset.receptionist = JSON.stringify(payload);
-        row.children[3].innerHTML = statusPill(1);
-
-        closeDeleteConfirm();
-        selectRow(row);
-    })
-    .catch(() => toast('Lỗi kết nối server!', 'error'));
-}
-
-function closeDeleteConfirm(){ document.getElementById('deleteConfirmModal').style.display = 'none'; }
-
-/* ===== Modal Add/Edit ===== */
 const modal = document.getElementById('receptionistModal');
 
 function showAddModal(){
@@ -861,8 +873,10 @@ function showAddModal(){
     document.getElementById('receptionist_id').value = '';
     document.getElementById('password').required = true;
     document.getElementById('pwHint').textContent = '(bắt buộc khi thêm)';
+    document.getElementById('status').value = '1';
     modal.style.display = 'flex';
 }
+
 function closeModal(){ modal.style.display = 'none'; }
 
 function openEdit(id){
@@ -877,6 +891,7 @@ function openEdit(id){
     document.getElementById('phone').value = r.phone || '';
     document.getElementById('email').value = r.email || '';
     document.getElementById('username').value = r.username || '';
+    document.getElementById('status').value = String(r.status ?? 1);
 
     document.getElementById('password').value = '';
     document.getElementById('password').required = false;
@@ -924,7 +939,7 @@ function addRow(r){
         phone: r.phone,
         email: r.email,
         username: r.username,
-        is_deleted: 0
+        status: Number(r.status)
     };
     tr.dataset.receptionist = JSON.stringify(payload);
 
@@ -934,7 +949,7 @@ function addRow(r){
         <td><strong>#${r.receptionist_id}</strong></td>
         <td><strong>${escapeHtml(r.full_name)}</strong></td>
         <td>${escapeHtml(contact)}</td>
-        <td>${statusPill(0)}</td>
+        <td>${statusPill(r.status)}</td>
     `;
     tbody.prepend(tr);
     bindRowClicks();
@@ -950,19 +965,19 @@ function updateRow(r){
     payload.phone = r.phone;
     payload.email = r.email;
     payload.username = r.username;
+    payload.status = Number(r.status);
     tr.dataset.receptionist = JSON.stringify(payload);
 
     const contact = [r.phone, r.email].filter(Boolean).join(' • ') || 'N/A';
 
     tr.children[1].innerHTML = `<strong>${escapeHtml(r.full_name)}</strong>`;
     tr.children[2].textContent = contact;
-    tr.children[3].innerHTML = statusPill(payload.is_deleted);
+    tr.children[3].innerHTML = statusPill(payload.status);
 
     bindRowClicks();
     if(selectedId === r.receptionist_id) selectRow(tr);
 }
 
-/* ===== Search filter ===== */
 document.getElementById('searchInput').addEventListener('input', function(){
     const q = this.value.toLowerCase().trim();
     document.querySelectorAll('#receptionistsTable tbody tr[id^="receptionist-"]').forEach(tr => {
@@ -972,7 +987,6 @@ document.getElementById('searchInput').addEventListener('input', function(){
     });
 });
 
-/* ===== Init ===== */
 bindRowClicks();
 </script>
 </body>

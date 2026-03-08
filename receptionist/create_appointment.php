@@ -719,10 +719,11 @@ $resetUrl = $editId > 0
   </div>
 
   <div class="nav">
-    <a class="active" href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
-    <a href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
-    <a href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
-  </div>
+  <a class="active" href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
+  <a href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
+  <a href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
+  <a href="profile.php"><i class="fas fa-id-badge"></i> Hồ sơ lễ tân</a>
+</div>
 
   <div class="card">
     <?php if ($success): ?>

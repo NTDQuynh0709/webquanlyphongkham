@@ -226,10 +226,11 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])) {
   </div>
 
   <div class="nav">
-    <a href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
-    <a href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
-    <a class="active" href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
-  </div>
+  <a href="create_appointment.php"><i class="fas fa-plus"></i> Tạo lịch khám</a>
+  <a href="appointments_list.php"><i class="fas fa-list"></i> DS lịch khám</a>
+  <a class="active" href="patients_list.php"><i class="fas fa-users"></i> DS bệnh nhân</a>
+  <a href="profile.php"><i class="fas fa-id-badge"></i> Hồ sơ lễ tân</a>
+</div>
 
   <div class="card">
     <div class="toolbar">
