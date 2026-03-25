@@ -1,0 +1,13 @@
+tc_id,mo_ta,username,password,expected_type,expected_value
+LG01,Đăng nhập thành công với admin,admin,admin123456,redirect,admin/dashboard.php
+LG02,Đăng nhập thành công với doctor,doctor,admin123456,redirect,doctor/dashboard.php
+LG03,Đăng nhập thành công với lễ tân,letan1,admin123456,redirect,receptionist/create_appointment.php
+LG04,Bỏ trống username,,admin123456,browser_validation,Please fill out this field.
+LG05,Bỏ trống password,letan1,,browser_validation,Please fill out this field.
+LG06,Bỏ trống cả username và password,,,browser_validation,Please fill out this field.
+LG07,Sai username,saiuser,admin123456,error,Tên đăng nhập hoặc mật khẩu không đúng
+LG08,Sai password của lễ tân,letan1,saimatkhau,error,Tên đăng nhập hoặc mật khẩu không đúng
+LG09,Sai cả username và password,saiuser,saimatkhau,error,Tên đăng nhập hoặc mật khẩu không đúng
+LG10,Username có khoảng trắng đầu/cuối,"  letan1  ",admin123456,redirect,receptionist/create_appointment.php
+LG11,Password có khoảng trắng đầu/cuối,letan1,"  admin123456  ",redirect,receptionist/create_appointment.php
+LG12,Cả username và password có khoảng trắng đầu/cuối,"  admin  ","  admin123456  ",redirect,admin/dashboard.php
