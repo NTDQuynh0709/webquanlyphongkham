@@ -45,6 +45,88 @@ function fmtDateTime($d){
     return $t ? date('d/m/Y H:i', $t) : 'N/A';
 }
 
+function normalize_text(?string $v): string {
+    $v = trim((string)($v ?? ''));
+    $v = preg_replace('/\s+/u', ' ', $v);
+    return trim((string)$v);
+}
+function nullable_text(?string $v): ?string {
+    $v = normalize_text($v);
+    return $v === '' ? null : $v;
+}
+function compare_value($v): string {
+    if ($v === null) return '';
+    return normalize_text((string)$v);
+}
+function validate_required_text(string $label, ?string $value, int $min = 1, int $max = 1000): ?string {
+    $value = normalize_text($value);
+    $len = mb_strlen($value, 'UTF-8');
+    if ($value === '') return $label . ' là bắt buộc!';
+    if ($len < $min) return $label . ' phải có ít nhất ' . $min . ' ký tự!';
+    if ($len > $max) return $label . ' không được vượt quá ' . $max . ' ký tự!';
+    return null;
+}
+function validate_optional_text_length(string $label, ?string $value, int $max = 1000): ?string {
+    $value = normalize_text($value);
+    if ($value !== '' && mb_strlen($value, 'UTF-8') > $max) {
+        return $label . ' không được vượt quá ' . $max . ' ký tự!';
+    }
+    return null;
+}
+function validate_decimal_range(string $label, ?string $value, float $min, float $max, int $scale = 2): array {
+    $value = normalize_text($value);
+    if ($value === '') return [true, null, null];
+
+    $normalized = str_replace(',', '.', $value);
+
+    if ($scale <= 0) {
+        if (!preg_match('/^\d+$/', $normalized)) {
+            return [false, null, $label . ' phải là số nguyên hợp lệ!'];
+        }
+    } else {
+        if (!preg_match('/^\d+(\.\d{1,' . $scale . '})?$/', $normalized)) {
+            return [false, null, $label . ' phải là số hợp lệ!'];
+        }
+    }
+
+    $number = (float)$normalized;
+    if ($number < $min || $number > $max) {
+        return [false, null, $label . ' phải nằm trong khoảng ' .
+            rtrim(rtrim((string)$min, '0'), '.') . ' - ' .
+            rtrim(rtrim((string)$max, '0'), '.') . '!'];
+    }
+
+    return [true, $normalized, null];
+}
+function validate_blood_pressure(?string $value): array {
+    $value = normalize_text($value);
+    if ($value === '') return [true, null, null];
+
+    if (!preg_match('/^(\d{2,3})\s*\/\s*(\d{2,3})$/', $value, $m)) {
+        return [false, null, 'Huyết áp phải đúng định dạng ví dụ 120/80!'];
+    }
+
+    $sys = (int)$m[1];
+    $dia = (int)$m[2];
+
+    if ($sys < 50 || $sys > 260 || $dia < 30 || $dia > 160) {
+        return [false, null, 'Huyết áp nằm ngoài ngưỡng hợp lệ!'];
+    }
+    if ($sys <= $dia) {
+        return [false, null, 'Huyết áp tâm thu phải lớn hơn tâm trương!'];
+    }
+
+    return [true, $sys . '/' . $dia, null];
+}
+function has_record_changes(array $old, array $new): bool {
+    foreach ($new as $k => $v) {
+        if (compare_value($old[$k] ?? null) !== compare_value($v)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Lấy thông tin admin
 $admin = null;
 try {
@@ -326,24 +408,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
         // UPDATE RECORD + LOG
         if ($action === 'update_record') {
             $record_id = (int)($_POST['record_id'] ?? 0);
-            $reason = trim($_POST['reason'] ?? '');
+            $reason = normalize_text($_POST['reason'] ?? '');
 
-            if ($record_id <= 0 || $reason === '') {
-                echo json_encode(['success' => false, 'message' => 'Thiếu record_id hoặc lý do chỉnh sửa!']);
+            if ($record_id <= 0) {
+                echo json_encode(['success' => false, 'message' => 'record_id không hợp lệ!']);
                 exit;
             }
 
-            $diagnosis = trim($_POST['diagnosis'] ?? '');
-            $treatment_plan = trim($_POST['treatment_plan'] ?? '');
-            $notes = trim($_POST['notes'] ?? '');
+            if ($msg = validate_required_text('Lý do chỉnh sửa', $reason, 10, 100)) {
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
 
-            $bp = trim($_POST['blood_pressure'] ?? '');
-            $hr = trim($_POST['heart_rate'] ?? '');
-            $temp = trim($_POST['temperature'] ?? '');
-            $height = trim($_POST['height'] ?? '');
-            $weight = trim($_POST['weight'] ?? '');
+            $diagnosis = normalize_text($_POST['diagnosis'] ?? '');
+            $treatment_plan = normalize_text($_POST['treatment_plan'] ?? '');
+            $notes = normalize_text($_POST['notes'] ?? '');
 
-            $rx_note = trim($_POST['rx_note'] ?? '');
+            $bp = normalize_text($_POST['blood_pressure'] ?? '');
+            $hr = normalize_text($_POST['heart_rate'] ?? '');
+            $temp = normalize_text($_POST['temperature'] ?? '');
+            $height = normalize_text($_POST['height'] ?? '');
+            $weight = normalize_text($_POST['weight'] ?? '');
+
+            $rx_note = normalize_text($_POST['rx_note'] ?? '');
+
+            if ($msg = validate_required_text('Chẩn đoán', $diagnosis, 10, 1000)) {
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+            if ($msg = validate_required_text('Phác đồ điều trị', $treatment_plan, 10, 2000)) {
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+            if ($msg = validate_optional_text_length('Ghi chú', $notes, 2000)) {
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+            if ($msg = validate_optional_text_length('Ghi chú đơn thuốc', $rx_note, 1000)) {
+                echo json_encode(['success' => false, 'message' => $msg]);
+                exit;
+            }
+
+            [$okBp, $bpNormalized, $bpError] = validate_blood_pressure($bp);
+            if (!$okBp) {
+                echo json_encode(['success' => false, 'message' => $bpError]);
+                exit;
+            }
+
+            [$okHr, $hrNormalized, $hrError] = validate_decimal_range('Nhịp tim', $hr, 20, 250, 0);
+            if (!$okHr) {
+                echo json_encode(['success' => false, 'message' => $hrError]);
+                exit;
+            }
+
+            [$okTemp, $tempNormalized, $tempError] = validate_decimal_range('Nhiệt độ', $temp, 30, 45, 1);
+            if (!$okTemp) {
+                echo json_encode(['success' => false, 'message' => $tempError]);
+                exit;
+            }
+
+            [$okHeight, $heightNormalized, $heightError] = validate_decimal_range('Chiều cao', $height, 30, 250, 2);
+            if (!$okHeight) {
+                echo json_encode(['success' => false, 'message' => $heightError]);
+                exit;
+            }
+
+            [$okWeight, $weightNormalized, $weightError] = validate_decimal_range('Cân nặng', $weight, 1, 500, 2);
+            if (!$okWeight) {
+                echo json_encode(['success' => false, 'message' => $weightError]);
+                exit;
+            }
 
             try {
                 $conn->beginTransaction();
@@ -387,13 +521,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                     'diagnosis' => $diagnosis,
                     'treatment_plan' => $treatment_plan,
                     'notes' => $notes,
-                    'blood_pressure' => $bp,
-                    'heart_rate' => $hr,
-                    'temperature' => $temp,
-                    'height' => $height,
-                    'weight' => $weight,
+                    'blood_pressure' => $bpNormalized ?? '',
+                    'heart_rate' => $hrNormalized ?? '',
+                    'temperature' => $tempNormalized ?? '',
+                    'height' => $heightNormalized ?? '',
+                    'weight' => $weightNormalized ?? '',
                     'rx_note' => $rx_note,
                 ];
+
+                if (!has_record_changes($old_snapshot, $new_snapshot)) {
+                    $conn->rollBack();
+                    echo json_encode(['success' => false, 'message' => 'Không có thay đổi dữ liệu nên chưa cập nhật.']);
+                    exit;
+                }
 
                 $up = $conn->prepare("
                     UPDATE medical_records
@@ -412,12 +552,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 $up->execute([
                     'diag' => enc_field($diagnosis),
                     'tp' => enc_field($treatment_plan),
-                    'notes' => ($notes !== '' ? $notes : null),
-                    'bp' => ($bp !== '' ? $bp : null),
-                    'hr' => ($hr !== '' ? $hr : null),
-                    'temp' => ($temp !== '' ? $temp : null),
-                    'h' => ($height !== '' ? $height : null),
-                    'w' => ($weight !== '' ? $weight : null),
+                    'notes' => nullable_text($notes),
+                    'bp' => $bpNormalized,
+                    'hr' => $hrNormalized,
+                    'temp' => $tempNormalized,
+                    'h' => $heightNormalized,
+                    'w' => $weightNormalized,
                     'rid' => $record_id,
                 ]);
 
@@ -429,9 +569,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                         LIMIT 1
                     ");
                     $up2->execute([
-                        'note' => ($rx_note !== '' ? $rx_note : null),
+                        'note' => nullable_text($rx_note),
                         'pid'  => (int)$oldRx['prescription_id'],
                     ]);
+                } elseif ($rx_note !== '') {
+                    $conn->rollBack();
+                    echo json_encode(['success' => false, 'message' => 'Record này chưa có đơn thuốc nên không thể lưu ghi chú đơn thuốc!']);
+                    exit;
                 }
 
                 $ip = $_SERVER['REMOTE_ADDR'] ?? null;
@@ -458,7 +602,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 echo json_encode(['success' => true, 'message' => 'Cập nhật kết quả khám thành công (đã lưu log)!']);
                 exit;
             } catch (Throwable $e) {
-                $conn->rollBack();
+                if ($conn->inTransaction()) $conn->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Lỗi cập nhật: ' . $e->getMessage()]);
                 exit;
             }
@@ -922,7 +1066,7 @@ tbody tr.selected{background:#f0f2ff !important}
             <div class="table-wrap">
                 <table id="patientsTable">
                     <thead>
-                        <tr>
+                        <tr onclick="toggleAppt('${escapeHtml(aid)}')" style="cursor:pointer">
                             <th style="width:90px">Mã</th>
                             <th>Họ tên</th>
                             <th style="width:160px">SĐT</th>
@@ -1162,13 +1306,13 @@ tbody tr.selected{background:#f0f2ff !important}
                         </div>
 
                         <div class="field">
-                            <label>Chẩn đoán</label>
-                            <textarea id="diagnosis_edit" name="diagnosis" placeholder="Nhập chẩn đoán..."></textarea>
+                            <label>Chẩn đoán <span class="req">*</span></label>
+                            <textarea id="diagnosis_edit" name="diagnosis" placeholder="Nhập chẩn đoán..." required></textarea>
                         </div>
 
                         <div class="field">
-                            <label>Phác đồ điều trị</label>
-                            <textarea id="treatment_plan_edit" name="treatment_plan" placeholder="Nhập phác đồ điều trị..."></textarea>
+                            <label>Phác đồ điều trị <span class="req">*</span></label>
+                            <textarea id="treatment_plan_edit" name="treatment_plan" placeholder="Nhập phác đồ điều trị..." required></textarea>
                         </div>
 
                         <div class="field">
@@ -1251,6 +1395,44 @@ function formatDateTime(iso){
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
     return d.toLocaleString('vi-VN');
+}
+function fieldLabel(key){
+    const map = {
+        diagnosis: 'Chẩn đoán',
+        treatment_plan: 'Phác đồ điều trị',
+        notes: 'Ghi chú',
+        blood_pressure: 'Huyết áp',
+        heart_rate: 'Nhịp tim',
+        temperature: 'Nhiệt độ',
+        height: 'Chiều cao',
+        weight: 'Cân nặng',
+        rx_note: 'Ghi chú đơn thuốc'
+    };
+    return map[key] || key;
+}
+
+function getAuditDiffs(oldData, newData){
+    const diffs = [];
+    const keys = new Set([
+        ...Object.keys(oldData || {}),
+        ...Object.keys(newData || {})
+    ]);
+
+    keys.forEach((key) => {
+        const oldVal = String(oldData?.[key] ?? '').trim();
+        const newVal = String(newData?.[key] ?? '').trim();
+
+        if (oldVal !== newVal) {
+            diffs.push({
+                key,
+                label: fieldLabel(key),
+                old: oldVal || '—',
+                new: newVal || '—'
+            });
+        }
+    });
+
+    return diffs;
 }
 
 document.getElementById('searchInput').addEventListener('input', function(){
@@ -1349,19 +1531,11 @@ function toggleAppt(aid){
         if (row.id !== 'appt-body-' + aid) row.style.display = 'none';
     });
 
-    document.querySelectorAll('[data-toggle]').forEach(btn => {
-        if (String(btn.getAttribute('data-toggle')) !== String(aid)) {
-            btn.textContent = 'Xem chi tiết';
-        }
-    });
-
     const tr = document.getElementById('appt-body-' + aid);
     if (!tr) return;
 
     const isOpen = tr.style.display !== 'none';
     tr.style.display = isOpen ? 'none' : '';
-    const btn = document.querySelector(`[data-toggle="${aid}"]`);
-    if (btn) btn.textContent = isOpen ? 'Xem chi tiết' : 'Ẩn chi tiết';
 }
 
 /* ===== Modal sửa kết quả khám ===== */
@@ -1396,31 +1570,58 @@ document.getElementById('recordForm').addEventListener('submit', function(e){
     e.preventDefault();
 
     const reason = document.getElementById('reason_edit').value.trim();
+    const diagnosis = document.getElementById('diagnosis_edit').value.trim();
+    const treatmentPlan = document.getElementById('treatment_plan_edit').value.trim();
     const recordId = document.getElementById('record_id_edit').value;
 
     if (!recordId) {
         toast('Không có record_id!', 'error');
         return;
     }
-    if (!reason) {
-        toast('Vui lòng nhập lý do chỉnh sửa!', 'error');
+    if (reason.length < 10) {
+        toast('Lý do chỉnh sửa phải có ít nhất 10 ký tự!', 'error');
         document.getElementById('reason_edit').focus();
+        return;
+    }
+    if (!diagnosis) {
+        toast('Vui lòng nhập chẩn đoán!', 'error');
+        document.getElementById('diagnosis_edit').focus();
+        return;
+    }
+    if (!treatmentPlan) {
+        toast('Vui lòng nhập phác đồ điều trị!', 'error');
+        document.getElementById('treatment_plan_edit').focus();
         return;
     }
 
     const fd = new FormData(this);
 
-    fetch('patients.php?action=update_record', { method:'POST', body: fd })
-      .then(r => r.json())
-      .then(data => {
-          toast(data.message || 'Done', data.success ? 'success' : 'error');
-          if (!data.success) return;
+    fetch('patients.php?action=update_record', {
+    method: 'POST',
+    body: fd
+})
+.then(async (r) => {
+    const text = await r.text();
+    console.log('RAW RESPONSE:', text);
 
-          closeRecordModal();
-          if (currentDetailId) openDetail(currentDetailId);
-          loadAllAudits();
-      })
-      .catch(() => toast('Lỗi kết nối server!', 'error'));
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        throw new Error(text || 'Response không phải JSON');
+    }
+})
+.then(data => {
+    toast(data.message || 'Done', data.success ? 'success' : 'error');
+    if (!data.success) return;
+
+    closeRecordModal();
+    if (currentDetailId) openDetail(currentDetailId);
+    loadAllAudits();
+})
+.catch((err) => {
+    console.error(err);
+    toast(err.message || 'Lỗi kết nối server!', 'error');
+});
 });
 
 function adminViewAudits(record_id){
@@ -1434,17 +1635,37 @@ function adminViewAudits(record_id){
       .then(r => r.json())
       .then(data => {
           if (!data.success) return toast(data.message || 'Không lấy được log', 'error');
+
           const rows = data.rows || [];
-          if (!rows.length) return alert('Chưa có log chỉnh sửa.');
+          if (!rows.length) {
+              alert('Chưa có log chỉnh sửa.');
+              return;
+          }
 
           const msg = rows.map(x => {
+              let oldData = {};
+              let newData = {};
+
+              try { oldData = JSON.parse(x.old_data || '{}'); } catch(e) {}
+              try { newData = JSON.parse(x.new_data || '{}'); } catch(e) {}
+
+              const diffs = getAuditDiffs(oldData, newData);
+
+              const diffText = diffs.length
+                ? diffs.map(d => `  • ${d.label}: "${d.old}" → "${d.new}"`).join('\n')
+                : '  • Không xác định được dữ liệu thay đổi';
+
               const t = x.created_at || '';
               const who = (x.actor_role || '') + '#' + (x.actor_id || '');
               const reason = x.reason || '';
-              return `- ${t} • ${who} • ${reason}`;
-          }).join('\n');
 
-          alert('Lịch sử chỉnh sửa (record #' + record_id + '):\n' + msg);
+              return `- ${t} • ${who}
+Lý do: ${reason}
+Thay đổi:
+${diffText}`;
+          }).join('\n\n');
+
+          alert('Lịch sử chỉnh sửa (record #' + record_id + '):\n\n' + msg);
       })
       .catch(() => toast('Lỗi kết nối server!', 'error'));
 }
@@ -1471,9 +1692,8 @@ function renderAppointmentBundle(pack){
           <thead>
             <tr>
               <th style="width:180px">Ngày khám</th>
-              <th>Bác sĩ / Khoa</th>
+              <th style="width:160px">Bác sĩ / Khoa</th>
               <th style="width:160px">Kết quả</th>
-              <th style="width:150px">Thao tác</th>
             </tr>
           </thead>
           <tbody>
@@ -1529,8 +1749,8 @@ function renderAppointmentBundle(pack){
                     </div>
 
                     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                        <button class="mini-btn" type="button" onclick='openRecordEditModal(${JSON.stringify(payload)})'>✏️ Sửa kết quả</button>
-                        <button class="mini-btn" type="button" onclick="adminViewAudits(${Number(r.record_id || 0)})">🕒 Log record</button>
+                        <button class="mini-btn" type="button" onclick='event.stopPropagation(); openRecordEditModal(${JSON.stringify(payload)})'>✏️ Sửa kết quả</button>
+                        <button class="mini-btn" type="button" onclick="event.stopPropagation(); adminViewAudits(${Number(r.record_id || 0)})">🕒 Log record</button>
                         <span class="mini-pill">record #${escapeHtml(r.record_id)}</span>
                     </div>
 
@@ -1595,7 +1815,7 @@ function renderAppointmentBundle(pack){
         }
 
         html += `
-          <tr>
+          <tr onclick="toggleAppt('${escapeHtml(aid)}')" style="cursor:pointer">
             <td>
                 <div class="appt-summary">
                     <div class="appt-main">${escapeHtml(apptTime)}</div>
@@ -1609,9 +1829,6 @@ function renderAppointmentBundle(pack){
                 </div>
             </td>
             <td>${resultStatus}</td>
-            <td>
-              <button class="mini-btn primary" type="button" data-toggle="${escapeHtml(aid)}" onclick="toggleAppt('${escapeHtml(aid)}')">Xem chi tiết</button>
-            </td>
           </tr>
           <tr id="appt-body-${escapeHtml(aid)}" class="detail-row" style="display:none;">
             <td colspan="4">
@@ -1748,11 +1965,30 @@ function renderAllAudits(list){
     }
 
     allLogList.innerHTML = list.map(x => {
+        let oldData = {};
+        let newData = {};
+
+        try { oldData = JSON.parse(x.old_data || '{}'); } catch(e) {}
+        try { newData = JSON.parse(x.new_data || '{}'); } catch(e) {}
+
+        const diffs = getAuditDiffs(oldData, newData);
+
+        const diffHtml = diffs.length
+            ? diffs.map(d => `
+                <div style="padding:8px 10px;border:1px solid #eef2f7;border-radius:10px;background:#fafafa;margin-top:8px;">
+                    <div style="font-weight:900;color:#111827;">${escapeHtml(d.label)}</div>
+                    <div style="margin-top:4px;color:#6b7280;"><b>Trước:</b> ${escapeHtml(d.old)}</div>
+                    <div style="margin-top:2px;color:#16a34a;"><b>Sau:</b> ${escapeHtml(d.new)}</div>
+                </div>
+            `).join('')
+            : `<div class="log-mini">Không có dữ liệu thay đổi để hiển thị</div>`;
+
         const t = escapeHtml(x.created_at || '');
         const who = escapeHtml((x.actor_role || '') + '#' + (x.actor_id || ''));
         const rid = escapeHtml(String(x.record_id || ''));
         const reason = escapeHtml(x.reason || '');
         const ip = escapeHtml(x.ip || '');
+
         return `
           <div class="log-item">
             <div class="log-top">
@@ -1761,6 +1997,10 @@ function renderAllAudits(list){
             </div>
             <div class="log-reason">📝 Lý do: ${reason || '<span style="color:#6b7280">—</span>'}</div>
             <div class="log-mini">🌐 IP: ${ip || '—'}</div>
+            <div style="margin-top:10px;">
+                <div style="font-weight:900;color:#111827;">Các phần đã sửa:</div>
+                ${diffHtml}
+            </div>
             <div class="log-actions">
               <button class="mini-btn" onclick="adminViewAudits(${Number(x.record_id||0)})">Xem log record</button>
             </div>

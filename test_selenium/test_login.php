@@ -1,5 +1,5 @@
 <?php
-require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/../vendor/autoload.php'; //Load thư viện Selenium PHP
 
 use Facebook\WebDriver\Remote\DesiredCapabilities;
 use Facebook\WebDriver\Remote\RemoteWebDriver;
@@ -13,6 +13,7 @@ class LoginCsvTester
     private string $seleniumHost = 'http://localhost:4444';
     private string $loginUrl = 'http://localhost/webquanlyphongkham/login.php';
 
+//Khởi tạo browser trước khi chạy test
     public function setUp(): void
     {
         $this->driver = RemoteWebDriver::create(
@@ -22,6 +23,7 @@ class LoginCsvTester
         $this->driver->manage()->window()->maximize();
     }
 
+    //Đóng browser sau khi chạy xong.
     public function tearDown(): void
     {
         if (isset($this->driver)) {
@@ -29,6 +31,7 @@ class LoginCsvTester
         }
     }
 
+//Mở trang login và chờ cho form đăng nhập sẵn sàng.
     private function openLoginPage(): void
     {
         $this->driver->get($this->loginUrl);
@@ -41,6 +44,7 @@ class LoginCsvTester
         );
     }
 
+//Nhập dữ liệu vào ô input theo thuộc tính name
     private function setInputByName(string $name, string $value): void
     {
         $el = $this->driver->findElement(WebDriverBy::name($name));
@@ -50,6 +54,7 @@ class LoginCsvTester
         }
     }
 
+//Bấm nút submit của form login.
     private function submitLogin(): void
     {
         $this->driver->findElement(
@@ -57,6 +62,11 @@ class LoginCsvTester
         )->click();
     }
 
+//Chờ cho đến khi URL hiện tại chứa một chuỗi mong đợi.
+//tạo WebDriverWait
+// liên tục kiểm tra getCurrentURL()
+// nếu URL chứa chuỗi cần tìm thì pass
+// nếu quá thời gian mà chưa thấy thì fail
     private function waitForRedirectContains(string $expectedUrlPart, int $timeout = 10): void
     {
         $wait = new WebDriverWait($this->driver, $timeout);
@@ -65,6 +75,8 @@ class LoginCsvTester
         });
     }
 
+
+//Chờ đến khi thông báo lỗi hiện ra thật sự.
     private function waitForErrorVisible(int $timeout = 10): void
     {
         $wait = new WebDriverWait($this->driver, $timeout);
@@ -76,6 +88,7 @@ class LoginCsvTester
         });
     }
 
+//Lấy nội dung thông báo lỗi hiện tại.
     private function getErrorText(): string
     {
         return trim($this->driver->findElement(WebDriverBy::id('errorMessage'))->getText());
@@ -87,11 +100,13 @@ class LoginCsvTester
         return (string)$this->driver->executeScript('return arguments[0].validationMessage;', [$el]);
     }
 
+//Lấy URL hiện tại.
     private function getCurrentUrl(): string
     {
         return $this->driver->getCurrentURL();
     }
 
+//Đọc file CSV và biến nó thành mảng các test case.
     private function readCsv(string $file): array
     {
         $rows = [];

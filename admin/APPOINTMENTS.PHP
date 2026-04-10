@@ -37,6 +37,232 @@ function statusPillHtml($status){
     return '<span class="pill '.$x[1].'">'.h($x[0]).'</span>';
 }
 
+function is_valid_date($d){ return (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$d); }
+function is_valid_time_hm($t){
+    if (!preg_match('/^\d{2}:\d{2}$/', (string)$t)) return false;
+    [$hh, $mm] = array_map('intval', explode(':', $t));
+    return ($hh >= 0 && $hh <= 23 && $mm >= 0 && $mm <= 59);
+}
+function classify_patient_search_input(string $q): array {
+    $raw = trim($q);
+    if ($raw === '') return ['kind' => 'empty', 'compact' => ''];
+    $compact = preg_replace('/\s+/', '', $raw);
+    if (preg_match('/^\+?\d{8,15}$/', $compact)) return ['kind' => 'phone', 'compact' => $compact];
+    if (preg_match('/^\d{1,9}$/', $compact)) return ['kind' => 'patient_id', 'compact' => $compact];
+    return ['kind' => 'text', 'compact' => $compact];
+}
+const SERVICE_MIN = 20;
+const STEP_MIN = 5;
+const MAX_APPT_PER_DOCTOR_PER_DAY = 20;
+const MIN_LEAD_MIN = 0;
+const LAST_BOOKING_BEFORE_SHIFT_END_MIN = 10;
+function dt_from_ymd_hm(string $dateYmd, string $timeHm): ?DateTime {
+    $dt = DateTime::createFromFormat('Y-m-d H:i:s', $dateYmd . ' ' . $timeHm . ':00');
+    return $dt ?: null;
+}
+function add_minutes(DateTime $dt, int $min): DateTime {
+    $c = clone $dt;
+    $c->modify(($min >= 0 ? '+' : '') . $min . ' minutes');
+    return $c;
+}
+function minutes_diff(DateTime $a, DateTime $b): int {
+    return (int)round(($a->getTimestamp() - $b->getTimestamp()) / 60);
+}
+function round_up_to_step(DateTime $dt, int $stepMin = STEP_MIN): DateTime {
+    $c = clone $dt;
+    $total = ((int)$c->format('H')) * 60 + ((int)$c->format('i'));
+    $rounded = (int)(ceil($total / $stepMin) * $stepMin);
+    $h = intdiv($rounded, 60);
+    $mi = $rounded % 60;
+    $c->setTime($h % 24, $mi, 0);
+    return $c;
+}
+function round_down_to_step(DateTime $dt, int $stepMin = STEP_MIN): DateTime {
+    $c = clone $dt;
+    $total = ((int)$c->format('H')) * 60 + ((int)$c->format('i'));
+    $rounded = (int)(floor($total / $stepMin) * $stepMin);
+    $h = intdiv($rounded, 60);
+    $mi = $rounded % 60;
+    $c->setTime($h % 24, $mi, 0);
+    return $c;
+}
+function get_work_sessions(string $dateYmd): array {
+    return [
+        [new DateTime("$dateYmd 08:00:00"), new DateTime("$dateYmd 12:00:00")],
+        [new DateTime("$dateYmd 13:30:00"), new DateTime("$dateYmd 17:00:00")],
+    ];
+}
+function validate_working_hours(DateTime $start, int $serviceMin = SERVICE_MIN): array {
+    $sessions = get_work_sessions($start->format('Y-m-d'));
+    $end = add_minutes($start, $serviceMin);
+    foreach ($sessions as [$s, $e]) {
+        if ($start >= $s && $start < $e) {
+            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
+            if ($start > $latestByRule) {
+                return [false, "Giờ đặt lịch phải trước giờ tan ca ít nhất " . LAST_BOOKING_BEFORE_SHIFT_END_MIN . " phút (ca này tan lúc " . $e->format('H:i') . ")"];
+            }
+            if ($end > $e) {
+                return [false, "Lịch khám vượt quá thời gian làm việc của ca này (kết thúc lúc " . $e->format('H:i') . ")"];
+            }
+            return [true, 'OK'];
+        }
+    }
+    return [false, 'Phòng khám chỉ làm việc 08:00–12:00 và 13:30–17:00.'];
+}
+function dbColumnExists(PDO $conn, string $table, string $column): bool {
+    try {
+        $st = $conn->prepare("SHOW COLUMNS FROM `" . str_replace('`', '``', $table) . "` LIKE ?");
+        $st->execute([$column]);
+        return (bool)$st->fetch(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function getDoctor(PDO $conn, int $doctorId): ?array {
+    $hasSpecialty = dbColumnExists($conn, 'doctors', 'specialty');
+    $sql = $hasSpecialty
+        ? "SELECT doctor_id, full_name, department_id, status, is_deleted, specialty FROM doctors WHERE doctor_id = ? LIMIT 1"
+        : "SELECT doctor_id, full_name, department_id, status, is_deleted, '' AS specialty FROM doctors WHERE doctor_id = ? LIMIT 1";
+    $st = $conn->prepare($sql);
+    $st->execute([$doctorId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+function getPatient(PDO $conn, int $id): ?array {
+    $st = $conn->prepare("SELECT patient_id, full_name, phone, date_of_birth, gender, address, is_deleted FROM patients WHERE patient_id = ? LIMIT 1");
+    $st->execute([$id]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+function fetchDoctorDayAppointments(PDO $conn, int $doctorId, string $dateYmd, ?int $excludeApptId = null): array {
+    $sql = "SELECT appointment_id, appointment_date FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = ? AND status <> 'Hủy'";
+    $params = [$doctorId, $dateYmd];
+    if ($excludeApptId) { $sql .= " AND appointment_id <> ?"; $params[] = $excludeApptId; }
+    $sql .= " ORDER BY appointment_date ASC";
+    $st = $conn->prepare($sql);
+    $st->execute($params);
+    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+function intervals_from_appts(array $appts, int $serviceMin = SERVICE_MIN): array {
+    $blocks = [];
+    foreach ($appts as $a) {
+        $s = new DateTime($a['appointment_date']);
+        $e = add_minutes($s, $serviceMin);
+        $blocks[] = [$s, $e];
+    }
+    return $blocks;
+}
+function is_overlapping(DateTime $start, DateTime $end, array $blocks): bool {
+    foreach ($blocks as [$bs, $be]) if ($start < $be && $end > $bs) return true;
+    return false;
+}
+function find_prev_next(PDO $conn, int $doctorId, DateTime $start, ?int $excludeApptId = null): array {
+    $dt = $start->format('Y-m-d H:i:s');
+    if ($excludeApptId) {
+        $stPrev = $conn->prepare("SELECT appointment_date FROM appointments WHERE doctor_id = ? AND status <> 'Hủy' AND appointment_id <> ? AND appointment_date < ? ORDER BY appointment_date DESC LIMIT 1");
+        $stPrev->execute([$doctorId, $excludeApptId, $dt]);
+        $stNext = $conn->prepare("SELECT appointment_date FROM appointments WHERE doctor_id = ? AND status <> 'Hủy' AND appointment_id <> ? AND appointment_date > ? ORDER BY appointment_date ASC LIMIT 1");
+        $stNext->execute([$doctorId, $excludeApptId, $dt]);
+    } else {
+        $stPrev = $conn->prepare("SELECT appointment_date FROM appointments WHERE doctor_id = ? AND status <> 'Hủy' AND appointment_date < ? ORDER BY appointment_date DESC LIMIT 1");
+        $stPrev->execute([$doctorId, $dt]);
+        $stNext = $conn->prepare("SELECT appointment_date FROM appointments WHERE doctor_id = ? AND status <> 'Hủy' AND appointment_date > ? ORDER BY appointment_date ASC LIMIT 1");
+        $stNext->execute([$doctorId, $dt]);
+    }
+    return [$stPrev->fetchColumn() ?: null, $stNext->fetchColumn() ?: null];
+}
+function suggest_nearest_slot(PDO $conn, int $doctorId, string $dateYmd, DateTime $wanted, ?int $excludeApptId = null): ?DateTime {
+    $appts = fetchDoctorDayAppointments($conn, $doctorId, $dateYmd, $excludeApptId);
+    $blocks = intervals_from_appts($appts, SERVICE_MIN);
+    $sessions = get_work_sessions($dateYmd);
+    $now = new DateTime('now');
+    $best = null; $bestAbs = null;
+    foreach ($sessions as [$s, $e]) {
+        $cursor = round_up_to_step(clone $s, STEP_MIN);
+        while (add_minutes($cursor, SERVICE_MIN) <= $e) {
+            if ($cursor < $now) { $cursor = add_minutes($cursor, STEP_MIN); continue; }
+            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
+            if ($cursor > $latestByRule) break;
+            $end = add_minutes($cursor, SERVICE_MIN);
+            if (!is_overlapping($cursor, $end, $blocks)) {
+                $abs = abs(minutes_diff($cursor, $wanted));
+                if ($bestAbs === null || $abs < $bestAbs || ($abs === $bestAbs && $cursor < $best)) {
+                    $best = clone $cursor; $bestAbs = $abs;
+                }
+            }
+            $cursor = add_minutes($cursor, STEP_MIN);
+        }
+    }
+    return $best;
+}
+function validateRulesOffline(PDO $conn, int $doctorId, int $departmentId, string $dateYmd, string $timeHm, ?int $editingId = null): array {
+    if ($doctorId <= 0) return [false, 'Vui lòng chọn bác sĩ'];
+    if ($departmentId <= 0) return [false, 'Vui lòng chọn khoa'];
+    $doc = getDoctor($conn, $doctorId);
+    if (!$doc || ((int)($doc['is_deleted'] ?? 0) !== 0)) return [false, 'Bác sĩ không hợp lệ hoặc đã bị vô hiệu hóa'];
+    if ((int)($doc['department_id'] ?? 0) !== (int)$departmentId) return [false, 'Bác sĩ không thuộc khoa đã chọn'];
+    $apptStart = dt_from_ymd_hm($dateYmd, $timeHm);
+    if (!$apptStart) return [false, 'Ngày/giờ không hợp lệ'];
+    $now = new DateTime('now');
+    if ($apptStart < $now) return [false, 'Không thể đăng ký lịch ở quá khứ'];
+    [$okWork, $msgWork] = validate_working_hours($apptStart, SERVICE_MIN);
+    if (!$okWork) {
+        $suggest = suggest_nearest_slot($conn, $doctorId, $dateYmd, $apptStart, $editingId);
+        if ($suggest) $msgWork .= ' Gợi ý gần nhất: ' . $suggest->format('H:i');
+        return [false, $msgWork];
+    }
+    $st = $conn->prepare("SELECT COUNT(*) FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = ? AND status <> 'Hủy'" . ($editingId ? " AND appointment_id <> ?" : ""));
+    $params = [$doctorId, $dateYmd];
+    if ($editingId) $params[] = $editingId;
+    $st->execute($params);
+    if ((int)$st->fetchColumn() >= MAX_APPT_PER_DOCTOR_PER_DAY) return [false, 'Bác sĩ đã đủ ' . MAX_APPT_PER_DOCTOR_PER_DAY . ' lịch trong ngày này'];
+    [$prevStr, $nextStr] = find_prev_next($conn, $doctorId, $apptStart, $editingId);
+    $appts = fetchDoctorDayAppointments($conn, $doctorId, $dateYmd, $editingId);
+    $blocks = intervals_from_appts($appts, SERVICE_MIN);
+    $newEnd = add_minutes($apptStart, SERVICE_MIN);
+    if (is_overlapping($apptStart, $newEnd, $blocks)) {
+        $lines = ['Giờ này bị trùng/chồng lịch của bác sĩ.'];
+        $cand = null;
+        if ($prevStr) {
+            $prevStart = new DateTime($prevStr); $prevEnd = add_minutes($prevStart, SERVICE_MIN);
+            if ($apptStart < $prevEnd) { $lines[] = 'Lịch trước: ' . substr($prevStr, 0, 16); $cand = round_up_to_step($prevEnd, STEP_MIN); }
+        }
+        if ($nextStr) {
+            $nextStart = new DateTime($nextStr);
+            if ($newEnd > $nextStart) { $lines[] = 'Lịch sau: ' . substr($nextStr, 0, 16); if ($cand === null) $cand = round_down_to_step(add_minutes($nextStart, -SERVICE_MIN), STEP_MIN); }
+        }
+        $suggest = null;
+        if ($cand !== null) {
+            [$okWork2, ] = validate_working_hours($cand, SERVICE_MIN); $candEnd = add_minutes($cand, SERVICE_MIN);
+            if ($okWork2 && !is_overlapping($cand, $candEnd, $blocks)) $suggest = $cand;
+        }
+        if ($suggest === null) $suggest = suggest_nearest_slot($conn, $doctorId, $dateYmd, $apptStart, $editingId);
+        $lines[] = $suggest ? ('Gợi ý giờ gần nhất: ' . $suggest->format('H:i')) : 'Không còn khung giờ phù hợp trong ngày.';
+        return [false, implode("\n", $lines)];
+    }
+    return [true, 'OK'];
+}
+function search_patient(PDO $conn, string $q): array {
+    $info = classify_patient_search_input($q);
+    if ($info['kind'] === 'empty') return [];
+    if ($info['kind'] === 'patient_id') {
+        $st = $conn->prepare("SELECT patient_id, full_name, phone, date_of_birth, gender, address FROM patients WHERE patient_id = ? AND is_deleted = 0 LIMIT 1");
+        $st->execute([(int)$info['compact']]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        return $row ? [$row] : [];
+    }
+    $qLike = '%' . $info['compact'] . '%';
+    if ($info['kind'] === 'phone') {
+        $st = $conn->prepare("SELECT patient_id, full_name, phone, date_of_birth, gender, address FROM patients WHERE is_deleted = 0 AND (REPLACE(phone,' ','') LIKE REPLACE(?, ' ','') OR REPLACE(phone,' ','') LIKE REPLACE(?, ' ','') OR full_name LIKE ?) ORDER BY full_name ASC, patient_id DESC LIMIT 20");
+        $st->execute([$info['compact'], $qLike, '%' . trim($q) . '%']);
+    } else {
+        $st = $conn->prepare("SELECT patient_id, full_name, phone, date_of_birth, gender, address FROM patients WHERE is_deleted = 0 AND (full_name LIKE ? OR phone LIKE ?) ORDER BY full_name ASC, patient_id DESC LIMIT 20");
+        $st->execute(['%' . trim($q) . '%', '%' . trim($q) . '%']);
+    }
+    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
 /* =========================
    LOAD ADMIN
 ========================= */
@@ -197,20 +423,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $deptId = (int)($_POST['department_id'] ?? 0);
             if ($deptId <= 0) { echo json_encode(['success'=>true,'rows'=>[]]); exit; }
 
-            $stmt = $conn->prepare("
-                SELECT d.doctor_id, d.full_name
-                FROM doctors d
-                LEFT JOIN departments dp ON dp.department_id = :did
-                WHERE d.is_deleted = 0
-                  AND (
-                        (d.department_id = :did)
-                        OR (d.specialty = dp.department_name)
-                      )
-                ORDER BY d.full_name ASC
-            ");
-            $stmt->execute(['did'=>$deptId]);
+            $hasSpecialty = dbColumnExists($conn, 'doctors', 'specialty');
+
+if ($hasSpecialty) {
+    $stmt = $conn->prepare("
+        SELECT DISTINCT d.doctor_id, d.full_name
+        FROM doctors d
+        LEFT JOIN departments dp ON dp.department_id = :did
+        WHERE d.is_deleted = 0
+          AND (
+                d.department_id = :did
+                OR d.specialty = dp.department_name
+                OR d.specialty LIKE CONCAT('%', dp.department_name, '%')
+              )
+        ORDER BY d.full_name ASC
+    ");
+    $stmt->execute(['did'=>$deptId]);
+} else {
+    $stmt = $conn->prepare("
+        SELECT DISTINCT d.doctor_id, d.full_name
+        FROM doctors d
+        WHERE d.is_deleted = 0
+          AND d.department_id = :did
+        ORDER BY d.full_name ASC
+    ");
+    $stmt->execute(['did'=>$deptId]);
+}
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
             echo json_encode(['success'=>true,'rows'=>$rows]);
+            exit;
+        }
+
+        // SEARCH PATIENT
+        if ($action === 'search_patient') {
+            $q = trim((string)($_POST['q'] ?? ''));
+            echo json_encode(['success'=>true, 'items'=>search_patient($conn, $q)]);
             exit;
         }
 
@@ -219,14 +466,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             $department_id = (int)($_POST['department_id'] ?? 0);
             $doctor_id = (int)($_POST['doctor_id'] ?? 0);
+            $appointment_date_only = trim($_POST['appointment_date_only'] ?? '');
+            $appointment_time = trim($_POST['appointment_time'] ?? '');
             $appointment_date = trim($_POST['appointment_date'] ?? '');
             $symptoms = trim($_POST['symptoms'] ?? '');
             $status = trim($_POST['status'] ?? 'Chờ khám');
 
+            $new_full_name = trim((string)($_POST['new_full_name'] ?? ''));
+            $new_phone = trim((string)($_POST['new_phone'] ?? ''));
+            $new_dob = trim((string)($_POST['new_dob'] ?? ''));
+            $new_gender = trim((string)($_POST['new_gender'] ?? ''));
+            $new_address = trim((string)($_POST['new_address'] ?? ''));
+
             if (!in_array($status, ['Chờ khám','Đang khám','Hoàn tất','Hủy'], true)) $status = 'Chờ khám';
 
-            if ($patient_id<=0 || $department_id<=0 || $doctor_id<=0 || $appointment_date==='' || $symptoms==='') {
-                echo json_encode(['success'=>false,'message'=>'Thiếu dữ liệu bắt buộc (Bệnh nhân/Khoa/Bác sĩ/Ngày khám/Triệu chứng)!']);
+            if ($appointment_date_only === '' || $appointment_time === '') {
+                if ($appointment_date !== '') {
+                    $tmp = strtotime($appointment_date);
+                    if ($tmp) {
+                        $appointment_date_only = date('Y-m-d', $tmp);
+                        $appointment_time = date('H:i', $tmp);
+                    }
+                }
+            }
+
+            if ($patient_id <= 0) {
+                if ($new_full_name === '' || $new_phone === '' || $new_dob === '') {
+                    echo json_encode(['success'=>false,'message'=>'Vui lòng chọn bệnh nhân hoặc nhập đủ thông tin bệnh nhân mới!']);
+                    exit;
+                }
+                if (!is_valid_date($new_dob)) {
+                    echo json_encode(['success'=>false,'message'=>'Ngày sinh bệnh nhân không hợp lệ!']);
+                    exit;
+                }
+                if ($new_gender !== '' && !in_array($new_gender, ['Male','Female'], true)) $new_gender = '';
+                try {
+                    $stmt = $conn->prepare("SELECT patient_id FROM patients WHERE phone = ? AND is_deleted = 0 LIMIT 1");
+                    $stmt->execute([$new_phone]);
+                    $existingPatientId = (int)($stmt->fetchColumn() ?: 0);
+                    if ($existingPatientId > 0) {
+                        $patient_id = $existingPatientId;
+                    } else {
+                        $stmt = $conn->prepare("INSERT INTO patients (full_name, phone, date_of_birth, gender, address) VALUES (?, ?, ?, ?, ?)");
+                        $stmt->execute([$new_full_name, $new_phone, $new_dob, ($new_gender ?: null), ($new_address ?: null)]);
+                        $patient_id = (int)$conn->lastInsertId();
+                    }
+                } catch (Throwable $e) {
+                    echo json_encode(['success'=>false,'message'=>'Không thể tạo bệnh nhân mới: '.$e->getMessage()]);
+                    exit;
+                }
+            }
+
+            if ($patient_id<=0 || $department_id<=0 || $doctor_id<=0 || $appointment_date_only==='' || $appointment_time==='') {
+                echo json_encode(['success'=>false,'message'=>'Thiếu dữ liệu bắt buộc (Bệnh nhân/Khoa/Bác sĩ/Ngày khám/Giờ khám)!']);
+                exit;
+            }
+            if (!is_valid_date($appointment_date_only) || !is_valid_time_hm($appointment_time)) {
+                echo json_encode(['success'=>false,'message'=>'Ngày hoặc giờ khám không hợp lệ!']);
+                exit;
+            }
+            if ($symptoms==='') {
+                echo json_encode(['success'=>false,'message'=>'Vui lòng nhập triệu chứng!']);
                 exit;
             }
 
@@ -236,14 +536,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 echo json_encode(['success'=>false,'message'=>'Bệnh nhân không hợp lệ!']);
                 exit;
             }
-
             $stmt = $conn->prepare("SELECT COUNT(*) FROM departments WHERE department_id=:id");
             $stmt->execute(['id'=>$department_id]);
             if ((int)$stmt->fetchColumn() <= 0) {
                 echo json_encode(['success'=>false,'message'=>'Khoa không hợp lệ!']);
                 exit;
             }
-
             $stmt = $conn->prepare("SELECT COUNT(*) FROM doctors WHERE doctor_id=:id AND is_deleted=0");
             $stmt->execute(['id'=>$doctor_id]);
             if ((int)$stmt->fetchColumn() <= 0) {
@@ -251,15 +549,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
                 exit;
             }
 
-            $stmt = $conn->prepare("
-                INSERT INTO appointments (patient_id, doctor_id, department_id, appointment_date, symptoms, status)
-                VALUES (:pid, :doc, :dep, :dt, :sym, :st)
-            ");
+            [$okRule, $msgRule] = validateRulesOffline($conn, $doctor_id, $department_id, $appointment_date_only, $appointment_time, null);
+            if (!$okRule) {
+                echo json_encode(['success'=>false,'message'=>$msgRule]);
+                exit;
+            }
+
+            $fullDateTime = $appointment_date_only . ' ' . $appointment_time . ':00';
+            $stmt = $conn->prepare("INSERT INTO appointments (patient_id, doctor_id, department_id, appointment_date, symptoms, status) VALUES (:pid, :doc, :dep, :dt, :sym, :st)");
             $stmt->execute([
                 'pid'=>$patient_id,
                 'doc'=>$doctor_id,
                 'dep'=>$department_id,
-                'dt'=>$appointment_date,
+                'dt'=>$fullDateTime,
                 'sym'=>$symptoms,
                 'st'=>$status
             ]);
@@ -275,33 +577,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             $department_id = (int)($_POST['department_id'] ?? 0);
             $doctor_id = (int)($_POST['doctor_id'] ?? 0);
+            $appointment_date_only = trim($_POST['appointment_date_only'] ?? '');
+            $appointment_time = trim($_POST['appointment_time'] ?? '');
             $appointment_date = trim($_POST['appointment_date'] ?? '');
             $symptoms = trim($_POST['symptoms'] ?? '');
             $status = trim($_POST['status'] ?? 'Chờ khám');
 
             if (!in_array($status, ['Chờ khám','Đang khám','Hoàn tất','Hủy'], true)) $status = 'Chờ khám';
 
-            if ($appointment_id<=0 || $patient_id<=0 || $department_id<=0 || $doctor_id<=0 || $appointment_date==='' || $symptoms==='') {
+            if ($appointment_date_only === '' || $appointment_time === '') {
+                if ($appointment_date !== '') {
+                    $tmp = strtotime($appointment_date);
+                    if ($tmp) {
+                        $appointment_date_only = date('Y-m-d', $tmp);
+                        $appointment_time = date('H:i', $tmp);
+                    }
+                }
+            }
+
+            if ($appointment_id<=0 || $patient_id<=0 || $department_id<=0 || $doctor_id<=0 || $appointment_date_only==='' || $appointment_time==='') {
                 echo json_encode(['success'=>false,'message'=>'Thiếu dữ liệu cập nhật!']);
                 exit;
             }
+            if (!is_valid_date($appointment_date_only) || !is_valid_time_hm($appointment_time)) {
+                echo json_encode(['success'=>false,'message'=>'Ngày hoặc giờ khám không hợp lệ!']);
+                exit;
+            }
+            if ($symptoms==='') {
+                echo json_encode(['success'=>false,'message'=>'Vui lòng nhập triệu chứng!']);
+                exit;
+            }
 
-            $stmt = $conn->prepare("
-                UPDATE appointments
-                SET patient_id=:pid,
-                    department_id=:dep,
-                    doctor_id=:doc,
-                    appointment_date=:dt,
-                    symptoms=:sym,
-                    status=:st
-                WHERE appointment_id=:id
-            ");
+            [$okRule, $msgRule] = validateRulesOffline($conn, $doctor_id, $department_id, $appointment_date_only, $appointment_time, $appointment_id);
+            if (!$okRule) {
+                echo json_encode(['success'=>false,'message'=>$msgRule]);
+                exit;
+            }
+
+            $fullDateTime = $appointment_date_only . ' ' . $appointment_time . ':00';
+            $stmt = $conn->prepare("UPDATE appointments SET patient_id=:pid, department_id=:dep, doctor_id=:doc, appointment_date=:dt, symptoms=:sym, status=:st WHERE appointment_id=:id");
             $stmt->execute([
                 'id'=>$appointment_id,
                 'pid'=>$patient_id,
                 'dep'=>$department_id,
                 'doc'=>$doctor_id,
-                'dt'=>$appointment_date,
+                'dt'=>$fullDateTime,
                 'sym'=>$symptoms,
                 'st'=>$status
             ]);
@@ -376,15 +696,46 @@ try {
         WHERE is_deleted = 0
         ORDER BY full_name ASC
     ")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (PDOException $e) {
+    $patients = [];
+}
 
+try {
     $departments = $conn->query("
         SELECT department_id, department_name
         FROM departments
         ORDER BY department_name ASC
     ")->fetchAll(PDO::FETCH_ASSOC) ?: [];
 } catch (PDOException $e) {
-    $patients = [];
     $departments = [];
+}
+
+try {
+    $hasSpecialty = dbColumnExists($conn, 'doctors', 'specialty');
+
+    if ($hasSpecialty) {
+        $sqlDoctors = "
+            SELECT d.doctor_id, d.full_name, d.department_id, d.specialty, d.status, d.is_deleted,
+                   dp.department_name AS doctor_department_name
+            FROM doctors d
+            LEFT JOIN departments dp ON d.department_id = dp.department_id
+            WHERE d.is_deleted = 0
+            ORDER BY d.full_name ASC
+        ";
+    } else {
+        $sqlDoctors = "
+            SELECT d.doctor_id, d.full_name, d.department_id, '' AS specialty, d.status, d.is_deleted,
+                   dp.department_name AS doctor_department_name
+            FROM doctors d
+            LEFT JOIN departments dp ON d.department_id = dp.department_id
+            WHERE d.is_deleted = 0
+            ORDER BY d.full_name ASC
+        ";
+    }
+
+    $allDoctors = $conn->query($sqlDoctors)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+} catch (PDOException $e) {
+    $allDoctors = [];
 }
 ?>
 <!DOCTYPE html>
@@ -605,18 +956,19 @@ tbody tr.selected{background:#f0f2ff !important}
     padding:18px;
 }
 .modal{
-    width:100%;max-width:720px;background:#fff;border-radius:18px;overflow:hidden;
-    box-shadow:0 18px 50px rgba(0,0,0,0.2);
+    width:min(100%, 1080px);max-width:1080px;background:#fff;border-radius:18px;overflow:hidden;
+    box-shadow:0 18px 50px rgba(0,0,0,0.2);max-height:calc(100vh - 36px);display:flex;flex-direction:column;
 }
 .modal-head{
     padding:16px 18px;border-bottom:1px solid var(--line);
     display:flex;justify-content:space-between;align-items:center;gap:10px;
 }
 .modal-head h3{font-size:16px;font-weight:900}
-.modal-body{padding:16px 18px}
+.modal-body{padding:16px 18px;overflow:auto;max-height:calc(100vh - 180px);flex:1}
 .modal-foot{
     padding:14px 18px;border-top:1px solid var(--line);
     display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;background:#fff;
+    position:sticky;bottom:0;z-index:2;
 }
 
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -643,6 +995,20 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
 .toast.success{background:#16a34a}
 .toast.error{background:#dc2626}
 .toast .small{font-size:12px;font-weight:700;opacity:.92}
+.results{margin-top:10px;border:1px solid var(--line);border-radius:12px;overflow:hidden;display:none}
+.res-item{display:flex;justify-content:space-between;gap:10px;padding:10px 12px;border-top:1px solid var(--line);background:#fff}
+.res-item:first-child{border-top:none}
+.res-main{font-weight:900}
+.res-sub{font-size:12px;color:var(--muted);font-weight:800;margin-top:2px}
+.mini{padding:8px 10px;border-radius:12px;font-weight:900;font-size:12px;border:1px solid var(--line);cursor:pointer;display:inline-flex;align-items:center;gap:6px;background:#fff}
+.mini.blue{background:#eff6ff;color:#1d4ed8}
+.mini.green{background:#ecfdf5;color:#166534}
+.mini.gray{background:#f3f4f6;color:#111827}
+.patient-create{margin-top:12px;border:1px dashed var(--line);border-radius:14px;padding:12px;background:#fafafa;display:none}
+.patient-summary{margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#f8fafc;display:none}
+.patient-summary .ps-name{font-size:15px;font-weight:900}
+.patient-summary .ps-sub{font-size:12px;color:var(--muted);font-weight:800;margin-top:4px}
+.patient-create .title{font-weight:1000;margin-bottom:10px;display:flex;align-items:center;gap:8px}
 </style>
 </head>
 <body>
@@ -747,8 +1113,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
                             </div>
 
                             <div class="actions">
-                                <button class="btn btn-primary" onclick="editSelected()">✏️ Sửa</button>
-                                <button class="btn btn-danger" onclick="cancelSelected()">🚫 Hủy lịch</button>
+                                <button type="button" class="btn btn-primary" onclick="editSelected()">✏️ Sửa</button>
+                                <button type="button" class="btn btn-danger" onclick="cancelSelected()">🚫 Hủy lịch</button>
                             </div>
 
                             <div class="tabs">
@@ -786,25 +1152,63 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
             <button class="btn btn-light" onclick="closeForm()">✖️ Đóng</button>
         </div>
 
-        <form id="apptForm" class="modal-body">
+        <form id="apptForm" class="modal-body" autocomplete="off">
             <input type="hidden" name="appointment_id" id="appointment_id" />
+            <input type="hidden" name="patient_id" id="patient_id" value="0" />
 
-            <div class="form-grid">
-                <div class="field">
-                    <label>Bệnh nhân *</label>
-                    <select name="patient_id" id="patient_id" required>
-                        <option value="">Chọn bệnh nhân</option>
-                        <?php foreach ($patients as $p): ?>
-                            <option value="<?php echo (int)$p['patient_id']; ?>">
-                                #<?php echo (int)$p['patient_id']; ?> - <?php echo h($p['full_name']); ?> (<?php echo h($p['phone']); ?>)
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+            <div class="field" id="addPatientArea">
+                <label>Tìm bệnh nhân (SĐT hoặc Tên hoặc Mã BN)</label>
+                <input id="patientSearch" type="text" placeholder="Nhập SĐT hoặc tên...">
+
+                <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="mini green" id="btnShowCreate"><span>👤</span> Tạo mới bệnh nhân</button>
+                    <button type="button" class="mini gray" id="btnClearPick" style="display:none;"><span>✖️</span> Bỏ chọn</button>
+                    <div class="pill" id="pickedPill" style="display:none;">
+                        Đã chọn: <b id="pickedText"></b>
+                    </div>
                 </div>
 
-                <div class="field">
-                    <label>Ngày khám *</label>
-                    <input type="datetime-local" name="appointment_date" id="appointment_date" required />
+                <div class="results" id="searchResults"></div>
+
+                <div class="patient-create" id="createBox">
+                    <div class="title">➕ Thêm bệnh nhân mới (tự lưu khi bấm Lưu lịch hẹn)</div>
+                    <div class="form-grid">
+                        <div class="field">
+                            <label>Họ tên *</label>
+                            <input name="new_full_name" id="new_full_name" type="text" placeholder="Nhập họ tên">
+                        </div>
+                        <div class="field">
+                            <label>SĐT *</label>
+                            <input name="new_phone" id="new_phone" type="text" placeholder="Nhập số điện thoại">
+                        </div>
+                        <div class="field">
+                            <label>Ngày sinh *</label>
+                            <input name="new_dob" id="new_dob" type="date">
+                        </div>
+                        <div class="field">
+                            <label>Giới tính</label>
+                            <select name="new_gender" id="new_gender">
+                                <option value="">-- Chọn --</option>
+                                <option value="Male">Nam</option>
+                                <option value="Female">Nữ</option>
+                            </select>
+                        </div>
+                        <div class="field" style="grid-column:1/-1;">
+                            <label>Địa chỉ</label>
+                            <input name="new_address" id="new_address" type="text" placeholder="Nhập địa chỉ">
+                        </div>
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                        <button type="button" class="mini gray" id="btnHideCreate">Ẩn</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="field" id="editPatientArea" style="display:none;">
+                <label>Thông tin bệnh nhân</label>
+                <div class="patient-summary" id="editPatientSummary">
+                    <div class="ps-name" id="editPatientName"></div>
+                    <div class="ps-sub" id="editPatientMeta"></div>
                 </div>
             </div>
 
@@ -831,6 +1235,17 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
 
             <div class="form-grid">
                 <div class="field">
+                    <label>Ngày khám *</label>
+                    <input type="date" name="appointment_date_only" id="appointment_date_only" required />
+                </div>
+                <div class="field">
+                    <label>Giờ khám *</label>
+                    <input type="time" name="appointment_time" id="appointment_time" required />
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="field">
                     <label>Trạng thái</label>
                     <select name="status" id="status">
                         <option value="Chờ khám">Chờ khám</option>
@@ -839,10 +1254,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
                         <option value="Hủy">Hủy</option>
                     </select>
                 </div>
-
                 <div class="field">
-                    <label>Ghi chú</label>
-                    <input id="note_fake" placeholder="(tuỳ chọn)" disabled />
+                    <label>Khung giờ làm việc</label>
+                    <input value="08:00–12:00 | 13:30–17:00" disabled />
                 </div>
             </div>
 
@@ -859,23 +1273,20 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
     </div>
 </div>
 
-<script>
-function toast(message, type='success'){
-    const wrap = document.getElementById('toastWrap');
-    const el = document.createElement('div');
-    el.className = 'toast ' + (type === 'success' ? 'success' : 'error');
-    el.innerHTML = `<div>${type === 'success' ? '✅' : '⚠️'}</div>
-                    <div>
-                        <div>${escapeHtml(message)}</div>
-                        <div class="small">${new Date().toLocaleString()}</div>
-                    </div>`;
-    wrap.appendChild(el);
-    requestAnimationFrame(() => el.classList.add('show'));
-    setTimeout(() => {
-        el.classList.remove('show');
-        setTimeout(() => el.remove(), 200);
-    }, 2600);
-}
+<<script>
+const DEPARTMENT_MAP = <?php
+    $departmentMap = [];
+    foreach ($departments as $d) {
+        $departmentMap[(string)$d['department_id']] = $d['department_name'];
+    }
+    echo json_encode($departmentMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+?>;
+
+const ALL_DOCTORS = <?php
+    echo json_encode($allDoctors, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+?>;
+
+function toast(message, type='success'){}
 
 function escapeHtml(s){
     return String(s ?? '').replace(/[&<>"']/g, m => ({
@@ -1118,70 +1529,293 @@ function renderRecordRx(r, rxs){
 const formModal = document.getElementById('formModal');
 const deptSel = document.getElementById('department');
 const docSel  = document.getElementById('doctor');
+const patientSearch = document.getElementById('patientSearch');
+const searchResults = document.getElementById('searchResults');
+const patientIdInput = document.getElementById('patient_id');
+const pickedPill = document.getElementById('pickedPill');
+const pickedText = document.getElementById('pickedText');
+const btnClearPick = document.getElementById('btnClearPick');
+const createBox = document.getElementById('createBox');
+const btnShowCreate = document.getElementById('btnShowCreate');
+const btnHideCreate = document.getElementById('btnHideCreate');
+const appointmentDateOnly = document.getElementById('appointment_date_only');
+const appointmentTime = document.getElementById('appointment_time');
+const addPatientArea = document.getElementById('addPatientArea');
+const editPatientArea = document.getElementById('editPatientArea');
+const editPatientSummary = document.getElementById('editPatientSummary');
+const editPatientName = document.getElementById('editPatientName');
+const editPatientMeta = document.getElementById('editPatientMeta');
+
+function pad2(n){ return String(n).padStart(2,'0'); }
+function splitDateTimeValue(iso){
+    if (!iso) return {date:'', time:''};
+    const d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return {date:'', time:''};
+    return {
+        date: `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`,
+        time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+    };
+}
+function setMinDateTime(){
+    const now = new Date();
+    const today = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}`;
+    appointmentDateOnly.min = today;
+    if (!appointmentDateOnly.value) appointmentDateOnly.value = today;
+    if (appointmentDateOnly.value === today) {
+        appointmentTime.min = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    } else {
+        appointmentTime.min = '00:00';
+    }
+}
+function showPicked(p){
+    patientIdInput.value = p.patient_id;
+    pickedText.textContent = `#${p.patient_id} - ${p.full_name || ''} - ${p.phone || ''}`;
+    pickedPill.style.display = 'inline-flex';
+    btnClearPick.style.display = 'inline-flex';
+    createBox.style.display = 'none';
+}
+function showEditPatientInfo(p){
+    patientIdInput.value = p.patient_id || '';
+    editPatientName.textContent = `#${p.patient_id || ''} - ${p.full_name || 'N/A'}`;
+    const parts = [];
+    if (p.phone) parts.push(`SĐT: ${p.phone}`);
+    if (p.date_of_birth) parts.push(`Ngày sinh: ${new Date(p.date_of_birth).toLocaleDateString('vi-VN')}`);
+    if (p.gender) parts.push(`Giới tính: ${p.gender}`);
+    editPatientMeta.textContent = parts.join(' • ');
+    editPatientSummary.style.display = 'block';
+}
+function clearPicked(){
+    patientIdInput.value = '0';
+    pickedPill.style.display = 'none';
+    btnClearPick.style.display = 'none';
+    pickedText.textContent = '';
+}
+function clearEditPatientInfo(){
+    editPatientName.textContent = '';
+    editPatientMeta.textContent = '';
+    editPatientSummary.style.display = 'none';
+}
+function clearCreatePatientFields(){
+    ['new_full_name','new_phone','new_dob','new_gender','new_address'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.tagName === 'SELECT') el.value = '';
+        else el.value = '';
+    });
+}
+function showCreateBox(prefill=''){
+    clearPicked();
+    createBox.style.display = 'block';
+    const q = (prefill || patientSearch.value || '').trim();
+    if (q) {
+        const phoneLike = /^[+\d][\d\s]{7,20}$/.test(q);
+        if (phoneLike && !document.getElementById('new_phone').value) document.getElementById('new_phone').value = q.replace(/\s+/g, '');
+        if (!phoneLike && !document.getElementById('new_full_name').value) document.getElementById('new_full_name').value = q;
+    }
+}
+function hideCreateBox(){
+    createBox.style.display = 'none';
+    clearCreatePatientFields();
+}
+btnShowCreate.addEventListener('click', () => showCreateBox());
+btnHideCreate.addEventListener('click', hideCreateBox);
+btnClearPick.addEventListener('click', clearPicked);
+
+let patientSearchTimer = null;
+patientSearch.addEventListener('input', () => {
+    clearTimeout(patientSearchTimer);
+    patientSearchTimer = setTimeout(runPatientSearch, 220);
+});
+
+function runPatientSearch(){
+    const q = patientSearch.value.trim();
+    if (!q) {
+        searchResults.style.display = 'none';
+        searchResults.innerHTML = '';
+        return;
+    }
+    fetch('appointments.php?action=search_patient', {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:`q=${encodeURIComponent(q)}`
+    })
+    .then(r => r.json())
+    .then(res => {
+        const items = res?.items || [];
+        if (!items.length) {
+            searchResults.innerHTML = `
+                <div class="res-item">
+                    <div>
+                        <div class="res-main">Không tìm thấy</div>
+                        <div class="res-sub">Bạn có thể bấm “Tạo mới bệnh nhân”.</div>
+                    </div>
+                    <div><button type="button" class="mini green" onclick="showCreateBox('${escapeHtml(q).replace(/'/g, '&#039;')}')">Tạo mới</button></div>
+                </div>`;
+            searchResults.style.display = 'block';
+            return;
+        }
+        searchResults.innerHTML = items.map(p => {
+            const safe = JSON.stringify(p).replace(/</g, '\\u003c');
+            return `
+                <div class="res-item">
+                    <div>
+                        <div class="res-main">${escapeHtml('#' + p.patient_id + ' - ' + (p.full_name || ''))}</div>
+                        <div class="res-sub">SĐT: ${escapeHtml(p.phone || '')} • NS: ${escapeHtml(p.date_of_birth || '-')} • GT: ${escapeHtml(p.gender || '-')}</div>
+                    </div>
+                    <div><button type="button" class="mini blue" onclick='window.__pickPatient(${safe})'>Chọn</button></div>
+                </div>`;
+        }).join('');
+        searchResults.style.display = 'block';
+    })
+    .catch(() => toast('Không tìm được bệnh nhân!', 'error'));
+}
+window.__pickPatient = (p) => {
+    showPicked(p);
+    searchResults.style.display = 'none';
+    patientSearch.value = '';
+};
 
 function showAddModal(){
     document.getElementById('formTitle').textContent = 'Thêm lịch khám';
+    addPatientArea.style.display = '';
+    editPatientArea.style.display = 'none';
     document.getElementById('apptForm').reset();
     document.getElementById('appointment_id').value = '';
+    patientIdInput.value = '0';
+    clearPicked();
+    clearCreatePatientFields();
+    hideCreateBox();
+    patientSearch.value = '';
+    searchResults.style.display = 'none';
+    searchResults.innerHTML = '';
+    clearEditPatientInfo();
     docSel.innerHTML = `<option value="">Chọn bác sĩ</option>`;
-
+    setMinDateTime();
     const now = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    const minVal = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    document.getElementById('appointment_date').min = minVal;
-
+    appointmentTime.value = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
     formModal.style.display = 'flex';
 }
 function closeForm(){ formModal.style.display = 'none'; }
 function submitApptForm(){ document.getElementById('apptForm').requestSubmit(); }
 
-function loadDoctorsByDepartment(deptId, selectedDoctorId=null){
-    docSel.innerHTML = `<option value="">Đang tải...</option>`;
-    if (!deptId) { docSel.innerHTML = `<option value="">Chọn bác sĩ</option>`; return; }
+function normalizeText(str){
+    return String(str || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D')
+        .toLowerCase()
+        .trim();
+}
 
-    fetch('appointments.php?action=get_doctors', {
+function renderDoctorOptions(rows, selectedDoctorId=null, placeholder='Chọn bác sĩ'){
+    docSel.innerHTML = `<option value="">${placeholder}</option>`;
+    rows.forEach(x => {
+        const opt = document.createElement('option');
+        opt.value = String(x.doctor_id || '');
+        opt.textContent = x.full_name || 'Không rõ';
+        docSel.appendChild(opt);
+    });
+    if (selectedDoctorId) docSel.value = String(selectedDoctorId);
+}
+
+function getDoctorsForDepartmentLocal(deptId){
+    const deptName = normalizeText(DEPARTMENT_MAP[String(deptId)] || '');
+    const matched = ALL_DOCTORS.filter(x => {
+        const doctorDeptId = String(x.department_id || '');
+        const specialty = normalizeText(x.specialty || '');
+        const doctorDeptName = normalizeText(x.doctor_department_name || '');
+        return doctorDeptId === String(deptId)
+            || (deptName && specialty.includes(deptName))
+            || (deptName && doctorDeptName.includes(deptName));
+    });
+    return matched;
+}
+
+function uniqueDoctors(rows){
+    const seen = new Set();
+    return (rows || []).filter(x => {
+        const key = String(x.doctor_id || '');
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function appendFallbackSelectedDoctor(selectedDoctorId, fallbackDoctorName=''){
+    if (selectedDoctorId && ![...docSel.options].some(o => String(o.value) === String(selectedDoctorId))) {
+        const opt = document.createElement('option');
+        opt.value = String(selectedDoctorId);
+        opt.textContent = fallbackDoctorName || ('Bác sĩ #' + selectedDoctorId);
+        docSel.appendChild(opt);
+        docSel.value = String(selectedDoctorId);
+    }
+}
+
+function loadDoctorsByDepartment(deptId, selectedDoctorId=null, fallbackDoctorName=''){
+    if (!deptId) {
+        renderDoctorOptions([], null, 'Chọn bác sĩ');
+        return Promise.resolve();
+    }
+
+    let rows = uniqueDoctors(getDoctorsForDepartmentLocal(deptId));
+    if (rows.length) {
+        renderDoctorOptions(rows, selectedDoctorId, 'Chọn bác sĩ');
+        appendFallbackSelectedDoctor(selectedDoctorId, fallbackDoctorName);
+        return Promise.resolve();
+    }
+
+    docSel.innerHTML = `<option value="">Đang tải bác sĩ...</option>`;
+    return fetch('appointments.php?action=get_doctors', {
         method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body: `department_id=${encodeURIComponent(deptId)}`
+        body:`department_id=${encodeURIComponent(deptId)}`
     })
     .then(r => r.json())
     .then(res => {
-        const rows = res?.rows || [];
-        docSel.innerHTML = `<option value="">Chọn bác sĩ</option>`;
-        rows.forEach(x => {
-            const sel = (selectedDoctorId && String(selectedDoctorId) === String(x.doctor_id)) ? 'selected' : '';
-            docSel.innerHTML += `<option value="${escapeHtml(x.doctor_id)}" ${sel}>${escapeHtml(x.full_name)}</option>`;
-        });
+        rows = uniqueDoctors((res && res.rows) ? res.rows : []);
+        renderDoctorOptions(rows, selectedDoctorId, rows.length ? 'Chọn bác sĩ' : 'Không có bác sĩ');
+        appendFallbackSelectedDoctor(selectedDoctorId, fallbackDoctorName);
+        if (!rows.length) toast('Khoa này chưa có bác sĩ để chọn!', 'error');
     })
     .catch(() => {
-        docSel.innerHTML = `<option value="">Chọn bác sĩ</option>`;
+        renderDoctorOptions([], selectedDoctorId, 'Không tải được bác sĩ');
+        appendFallbackSelectedDoctor(selectedDoctorId, fallbackDoctorName);
         toast('Không tải được danh sách bác sĩ!', 'error');
     });
 }
 deptSel.addEventListener('change', () => loadDoctorsByDepartment(deptSel.value));
+appointmentDateOnly.addEventListener('change', setMinDateTime);
+
+function validateFormBeforeSubmit(formData){
+    if (!formData.get('patient_id') || Number(formData.get('patient_id')) <= 0) {
+        const newName = (formData.get('new_full_name') || '').trim();
+        const newPhone = (formData.get('new_phone') || '').trim();
+        const newDob = (formData.get('new_dob') || '').trim();
+        if (!newName || !newPhone || !newDob) return 'Vui lòng chọn bệnh nhân hoặc nhập đủ thông tin bệnh nhân mới!';
+    }
+    if (!(formData.get('appointment_date_only') || '').trim()) return 'Vui lòng chọn ngày khám!';
+    if (!(formData.get('appointment_time') || '').trim()) return 'Vui lòng chọn giờ khám!';
+    if (!(formData.get('symptoms') || '').trim()) return 'Vui lòng nhập triệu chứng!';
+    return '';
+}
 
 document.getElementById('apptForm').addEventListener('submit', function(e){
     e.preventDefault();
-
     const id = document.getElementById('appointment_id').value;
     const action = id ? 'edit' : 'add';
     const formData = new FormData(this);
-
+    const invalidMsg = validateFormBeforeSubmit(formData);
+    if (invalidMsg) return toast(invalidMsg, 'error');
     fetch(`appointments.php?action=${action}`, { method:'POST', body: formData })
     .then(r=>r.json())
     .then(res=>{
         toast(res.message || (res.success ? 'Thành công' : 'Thất bại'), res.success ? 'success' : 'error');
         if (!res.success) return;
-
         closeForm();
         loadList();
-
-        if (action === 'add' && res.appointment_id) {
-            setTimeout(() => selectRow(Number(res.appointment_id)), 250);
-        }
-        if (action === 'edit' && selectedId) {
-            setTimeout(() => selectRow(Number(selectedId)), 250);
-        }
+        if (action === 'add' && res.appointment_id) setTimeout(() => selectRow(Number(res.appointment_id)), 250);
+        if (action === 'edit' && selectedId) setTimeout(() => selectRow(Number(selectedId)), 250);
     })
     .catch(()=>toast('Lỗi kết nối server!', 'error'));
 });
@@ -1189,16 +1823,31 @@ document.getElementById('apptForm').addEventListener('submit', function(e){
 function editSelected(){
     if (!selectedCache || !selectedCache.appointment) return toast('Chưa chọn lịch!', 'error');
     const a = selectedCache.appointment;
-
+    const dt = splitDateTimeValue(a.appointment_date);
     document.getElementById('formTitle').textContent = 'Sửa lịch khám';
+    addPatientArea.style.display = 'none';
+    editPatientArea.style.display = '';
     document.getElementById('appointment_id').value = a.appointment_id || '';
-    document.getElementById('patient_id').value = a.patient_id || '';
-    document.getElementById('appointment_date').value = toDatetimeLocalValue(a.appointment_date);
-    document.getElementById('department').value = a.department_id || '';
     document.getElementById('status').value = a.status || 'Chờ khám';
     document.getElementById('symptoms').value = a.symptoms || '';
-
-    loadDoctorsByDepartment(a.department_id || '', a.doctor_id || '');
+    appointmentDateOnly.value = dt.date || '';
+    appointmentTime.value = dt.time || '';
+    setMinDateTime();
+    patientSearch.value = '';
+    searchResults.style.display = 'none';
+    searchResults.innerHTML = '';
+    clearCreatePatientFields();
+    hideCreateBox();
+    clearPicked();
+    showEditPatientInfo({
+        patient_id: a.patient_id || '',
+        full_name: a.patient_name || '',
+        phone: a.patient_phone || '',
+        date_of_birth: a.patient_dob || '',
+        gender: a.patient_gender || ''
+    });
+    document.getElementById('department').value = a.department_id || '';
+    loadDoctorsByDepartment(a.department_id || '', a.doctor_id || '', a.doctor_name || '');
     formModal.style.display = 'flex';
 }
 
