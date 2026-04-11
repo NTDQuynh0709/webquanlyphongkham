@@ -89,7 +89,6 @@ const SERVICE_MIN = 20;
 const STEP_MIN = 5;
 const MAX_APPT_PER_DOCTOR_PER_DAY = 20;
 const MIN_LEAD_MIN = 0;
-const LAST_BOOKING_BEFORE_SHIFT_END_MIN = 10;
 
 /* ================= Time helpers ================= */
 function dt_from_ymd_hm(string $dateYmd, string $timeHm): ?DateTime {
@@ -144,12 +143,6 @@ function validate_working_hours(DateTime $start, int $serviceMin = SERVICE_MIN):
 
     foreach ($sessions as [$s, $e]) {
         if ($start >= $s && $start < $e) {
-            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
-
-            if ($start > $latestByRule) {
-                return [false, "Giờ đặt lịch phải trước giờ tan ca ít nhất " . LAST_BOOKING_BEFORE_SHIFT_END_MIN . " phút (ca này tan lúc " . $e->format('H:i') . ")"];
-            }
-
             if ($end > $e) {
                 return [false, "Lịch khám vượt quá thời gian làm việc của ca này (kết thúc lúc " . $e->format('H:i') . ")"];
             }
@@ -343,8 +336,6 @@ function suggest_nearest_slot(PDO $conn, int $doctorId, string $dateYmd, DateTim
                 }
             }
 
-            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
-            if ($cursor > $latestByRule) break;
 
             $end = add_minutes($cursor, SERVICE_MIN);
             if (!is_overlapping($cursor, $end, $blocks)) {
@@ -808,7 +799,7 @@ $resetUrl = $editId > 0
     <div class="hero">
         <h1><i class="fas fa-plus"></i> <?php echo $editId > 0 ? 'Sửa lịch khám' : 'Tạo lịch khám'; ?></h1>
         <div class="sub">
-            Giờ làm việc: 08:00–12:00 &nbsp;|&nbsp; 13:30–17:00 • Đặt cuối trước tan ca <?php echo LAST_BOOKING_BEFORE_SHIFT_END_MIN; ?> phút
+            Giờ làm việc: 08:00–12:00 | 13:30–17:00
         </div>
     </div>
 

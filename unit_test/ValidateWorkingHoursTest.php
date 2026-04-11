@@ -28,29 +28,26 @@ final class ValidateWorkingHoursTest extends TestCase
 
         return [
 
-            // ========= GROUP A =========
             'TC01 - Start đầu ca sáng'  => ["$d 08:00:00", 20, true,  'OK'],
             'TC02 - Giữa ca sáng'       => ["$d 09:10:00", 20, true,  'OK'],
             'TC03 - Start đầu ca chiều' => ["$d 13:30:00", 20, true,  'OK'],
 
-            // ========= GROUP B =========
-            'TC04 - Biên -1 (11:49)' => ["$d 11:49:00", 20, true,  'OK'],
-            'TC05 - Biên đúng (11:50)' => ["$d 11:50:00", 20, true,  'OK'],
-            'TC06 - Biên +1 (11:51)' => ["$d 11:51:00", 20, false, 'trước giờ tan ca ít nhất'],
+            // Biên ca sáng: 11:40
+            'TC04 - Biên -1 (11:39)'    => ["$d 11:39:00", 20, true,  'OK'],
+            'TC05 - Biên đúng (11:40)'  => ["$d 11:40:00", 20, true,  'OK'],
+            'TC06 - Biên +1 (11:41)'    => ["$d 11:41:00", 20, false, 'vượt quá thời gian làm việc'],
 
-            // ========= GROUP C =========
-            'TC07 - Biên -1 (16:49)' => ["$d 16:49:00", 20, true,  'OK'],
-            'TC08 - Biên đúng (16:50)' => ["$d 16:50:00", 20, true,  'OK'],
-            'TC09 - Biên +1 (16:51)' => ["$d 16:51:00", 20, false, 'trước giờ tan ca ít nhất'],
+            // Biên ca chiều: 16:40
+            'TC07 - Biên -1 (16:39)'    => ["$d 16:39:00", 20, true,  'OK'],
+            'TC08 - Biên đúng (16:40)'  => ["$d 16:40:00", 20, true,  'OK'],
+            'TC09 - Biên +1 (16:41)'    => ["$d 16:41:00", 20, false, 'vượt quá thời gian làm việc'],
 
-            // ========= GROUP D =========
-            'TC10 - Trước giờ làm (07:59)' => ["$d 07:59:00", 20, false, 'Bệnh viện chỉ làm việc'],
-            'TC11 - Đúng 12:00 (ngoài ca)' => ["$d 12:00:00", 20, false, 'Bệnh viện chỉ làm việc'],
-            'TC12 - Trong giờ nghỉ trưa'   => ["$d 12:30:00", 20, false, 'Bệnh viện chỉ làm việc'],
-            'TC13 - Sau giờ làm (17:01)'   => ["$d 17:01:00", 20, false, 'Bệnh viện chỉ làm việc'],
+            'TC10 - Trước giờ làm (07:59)' => ["$d 07:59:00", 20, false, 'Phòng khám chỉ làm việc'],
+            'TC11 - Đúng 12:00 (ngoài ca)' => ["$d 12:00:00", 20, false, 'Phòng khám chỉ làm việc'],
+            'TC12 - Trong giờ nghỉ trưa'   => ["$d 12:30:00", 20, false, 'Phòng khám chỉ làm việc'],
+            'TC13 - Sau giờ làm (17:01)'   => ["$d 17:01:00", 20, false, 'Phòng khám chỉ làm việc'],
 
-            // ========= GROUP E =========
-            'TC14 - 11:45 + 20 vẫn OK' => ["$d 11:45:00", 20, true, 'OK'],
+            'TC14 - 11:10 + 20 vẫn OK'     => ["$d 11:10:00", 20, true, 'OK'],
         ];
     }
 }

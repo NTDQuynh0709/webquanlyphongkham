@@ -55,7 +55,7 @@ const SERVICE_MIN = 20;
 const STEP_MIN = 5;
 const MAX_APPT_PER_DOCTOR_PER_DAY = 20;
 const MIN_LEAD_MIN = 0;
-const LAST_BOOKING_BEFORE_SHIFT_END_MIN = 10;
+
 function dt_from_ymd_hm(string $dateYmd, string $timeHm): ?DateTime {
     $dt = DateTime::createFromFormat('Y-m-d H:i:s', $dateYmd . ' ' . $timeHm . ':00');
     return $dt ?: null;
@@ -95,18 +95,17 @@ function get_work_sessions(string $dateYmd): array {
 function validate_working_hours(DateTime $start, int $serviceMin = SERVICE_MIN): array {
     $sessions = get_work_sessions($start->format('Y-m-d'));
     $end = add_minutes($start, $serviceMin);
+
     foreach ($sessions as [$s, $e]) {
         if ($start >= $s && $start < $e) {
-            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
-            if ($start > $latestByRule) {
-                return [false, "Giờ đặt lịch phải trước giờ tan ca ít nhất " . LAST_BOOKING_BEFORE_SHIFT_END_MIN . " phút (ca này tan lúc " . $e->format('H:i') . ")"];
-            }
             if ($end > $e) {
                 return [false, "Lịch khám vượt quá thời gian làm việc của ca này (kết thúc lúc " . $e->format('H:i') . ")"];
             }
+
             return [true, 'OK'];
         }
     }
+
     return [false, 'Phòng khám chỉ làm việc 08:00–12:00 và 13:30–17:00.'];
 }
 function dbColumnExists(PDO $conn, string $table, string $column): bool {
@@ -177,23 +176,35 @@ function suggest_nearest_slot(PDO $conn, int $doctorId, string $dateYmd, DateTim
     $blocks = intervals_from_appts($appts, SERVICE_MIN);
     $sessions = get_work_sessions($dateYmd);
     $now = new DateTime('now');
-    $best = null; $bestAbs = null;
+    $best = null;
+    $bestAbs = null;
+
     foreach ($sessions as [$s, $e]) {
         $cursor = round_up_to_step(clone $s, STEP_MIN);
-        while (add_minutes($cursor, SERVICE_MIN) <= $e) {
-            if ($cursor < $now) { $cursor = add_minutes($cursor, STEP_MIN); continue; }
-            $latestByRule = add_minutes($e, -LAST_BOOKING_BEFORE_SHIFT_END_MIN);
-            if ($cursor > $latestByRule) break;
+
+        while (true) {
+            if ($cursor < $now) {
+                $cursor = add_minutes($cursor, STEP_MIN);
+                continue;
+            }
+
             $end = add_minutes($cursor, SERVICE_MIN);
+            if ($end > $e) {
+                break;
+            }
+
             if (!is_overlapping($cursor, $end, $blocks)) {
                 $abs = abs(minutes_diff($cursor, $wanted));
                 if ($bestAbs === null || $abs < $bestAbs || ($abs === $bestAbs && $cursor < $best)) {
-                    $best = clone $cursor; $bestAbs = $abs;
+                    $best = clone $cursor;
+                    $bestAbs = $abs;
                 }
             }
+
             $cursor = add_minutes($cursor, STEP_MIN);
         }
     }
+
     return $best;
 }
 function validateRulesOffline(PDO $conn, int $doctorId, int $departmentId, string $dateYmd, string $timeHm, ?int $editingId = null): array {
@@ -1273,7 +1284,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
     </div>
 </div>
 
-<<script>
+<script>
 const DEPARTMENT_MAP = <?php
     $departmentMap = [];
     foreach ($departments as $d) {
