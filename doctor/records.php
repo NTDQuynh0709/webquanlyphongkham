@@ -37,12 +37,40 @@ function enc_field(?string $v): ?string {
     if ($v === '') return '';
     return encrypt_text($v); // từ giờ lưu theo key mới
 }
+function enc_key(): string {
+    $b64 = getenv('DB_ENC_KEY') ?: '';
+    $raw = base64_decode($b64, true);
+    if ($raw === false || strlen($raw) !== 32) {
+        throw new RuntimeException('Missing/invalid DB_ENC_KEY.');
+    }
+    return $raw;
+}
+
 function dec_field(?string $v): ?string {
     if ($v === null) return null;
     $v = (string)$v;
     if ($v === '') return '';
+
     try {
-        return decrypt_text_auto($v);
+        $raw = base64_decode($v, true);
+        if ($raw === false || strlen($raw) < 28) {
+            return '[Không thể giải mã dữ liệu]';
+        }
+
+        $iv = substr($raw, 0, 12);
+        $tag = substr($raw, 12, 16);
+        $ciphertext = substr($raw, 28);
+
+        $plain = openssl_decrypt(
+            $ciphertext,
+            'aes-256-gcm',
+            enc_key(),
+            OPENSSL_RAW_DATA,
+            $iv,
+            $tag
+        );
+
+        return ($plain === false) ? '[Không thể giải mã dữ liệu]' : $plain;
     } catch (Throwable $e) {
         return '[Không thể giải mã dữ liệu]';
     }
@@ -67,15 +95,16 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
 
     $stmt = $conn->prepare("
         SELECT
-            mr.*,
-            a.appointment_date,
-            a.appointment_id,
-            p.patient_id,
-            p.full_name AS patient_name,
-            p.phone,
-            p.gender,
-            p.date_of_birth,
-            d.full_name AS doctor_name
+    mr.*,
+    a.appointment_date,
+    a.appointment_id,
+    p.patient_id,
+    p.full_name AS patient_name,
+    p.phone,
+    p.gender,
+    p.date_of_birth,
+    p.medical_history,
+    d.full_name AS doctor_name
         FROM medical_records mr
         JOIN appointments a ON mr.appointment_id = a.appointment_id
         JOIN patients p ON mr.patient_id = p.patient_id
@@ -113,7 +142,19 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
     // ✅ decrypt khi hiển thị
     $record['diagnosis'] = dec_field($record['diagnosis'] ?? null);
     $record['treatment_plan'] = dec_field($record['treatment_plan'] ?? null);
-
+$record['medical_history'] = dec_field($record['medical_history'] ?? null);
+$record['notes'] = dec_field($record['notes'] ?? null);
+if ($prescription_header) {
+    $prescription_header['note'] = dec_field($prescription_header['note'] ?? null);
+}
+if (!empty($prescription_items)) {
+    foreach ($prescription_items as &$it) {
+        $it['medication_name'] = dec_field($it['medication_name'] ?? null);
+        $it['dosage'] = dec_field($it['dosage'] ?? null);
+        $it['instructions'] = dec_field($it['instructions'] ?? null);
+    }
+    unset($it);
+}
     // =========================
     // UPDATE HANDLER (EDIT + LOG)
     // =========================
@@ -184,7 +225,7 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
             $up->execute([
                 'diag' => enc_field($new_diagnosis),
                 'tp' => enc_field($new_treatment_plan),
-                'notes' => ($new_notes !== '' ? $new_notes : null),
+                'notes' => enc_field($new_notes),
                 'bp' => ($new_bp !== '' ? $new_bp : null),
                 'hr' => ($new_hr !== '' ? $new_hr : null),
                 'temp' => ($new_temp !== '' ? $new_temp : null),
@@ -203,7 +244,7 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
                     LIMIT 1
                 ");
                 $up2->execute([
-                    'note' => ($new_rx_note !== '' ? $new_rx_note : null),
+                   'note' => enc_field($new_rx_note),
                     'pid' => (int)$prescription_header['prescription_id'],
                     'rid' => $record_id,
                 ]);
@@ -423,7 +464,12 @@ if (isset($_GET['id']) && is_numeric($_GET['id'])) {
                             </div>
                         </div>
                     </div>
-
+                    <?php if (!empty($record['medical_history'])): ?>
+<div class="section">
+    <h3>⚠️ Tiền sử bệnh / Dị ứng</h3>
+    <div class="text"><?php echo h($record['medical_history']); ?></div>
+</div>
+<?php endif; ?>
                     <div class="section">
                         <h3>📊 Dấu hiệu sinh tồn</h3>
                         <div class="info-grid">

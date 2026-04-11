@@ -14,6 +14,25 @@ if ($doctor_id <= 0) {
 function h($str) {
     return htmlspecialchars((string)$str, ENT_QUOTES, 'UTF-8');
 }
+function decryptData(?string $encrypted): string {
+    if (empty($encrypted)) return '';
+
+    $key = 'your-secret-key-123456'; // chuyển sang config/.env sau
+    $cipher = 'AES-256-CBC';
+
+    $decoded = base64_decode($encrypted, true);
+    if ($decoded === false) return '';
+
+    $ivLength = openssl_cipher_iv_length($cipher);
+    if (strlen($decoded) <= $ivLength) return '';
+
+    $iv = substr($decoded, 0, $ivLength);
+    $ciphertext = substr($decoded, $ivLength);
+
+    $plain = openssl_decrypt($ciphertext, $cipher, $key, OPENSSL_RAW_DATA, $iv);
+
+    return $plain === false ? '' : $plain;
+}
 function calcAge(?string $dob): ?int {
     if (empty($dob)) return null;
     try {
@@ -407,6 +426,12 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
     </div>
 
     <div class="container">
+        <?php if (!empty($_GET['error'])): ?>
+            <div style="max-width:1200px;margin:0 auto 16px;background:#ffebee;border:1px solid #ffcdd2;color:#b71c1c;padding:14px 16px;border-radius:8px;font-weight:600;">
+                <?php echo h($_GET['error']); ?>
+            </div>
+        <?php endif; ?>
+
         <form id="examForm" method="POST" action="save_exam.php" autocomplete="off">
             <input type="hidden" name="appointment_id" value="<?php echo (int)$appointment_id; ?>">
             <input type="hidden" name="return_date" value="<?php echo h($return_date); ?>">
@@ -445,44 +470,47 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
                 <!-- Tiền sử / Dị ứng -->
                 <h2 class="section-title">⚠ Tiền sử / Dị ứng</h2>
                 <div class="form-group">
-                    <textarea name="medical_history" class="form-control"
-                              placeholder="- Dị ứng: ...&#10;- Bệnh nền: ...&#10;- Tiền sử khác: ..."><?php
-                        echo h($patient['medical_history'] ?? '');
-                    ?></textarea>
+                    <?php
+$medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
+?>
+<textarea name="medical_history" class="form-control" maxlength="2000"
+          placeholder="- Dị ứng: ...&#10;- Bệnh nền: ...&#10;- Tiền sử khác: ..."><?php
+    echo h($medicalHistoryPlain);
+?></textarea>
                 </div>
 
                 <h2 class="section-title">📊 Dấu hiệu sinh tồn</h2>
                 <div class="vital-signs-grid">
                     <div class="form-group">
                         <label>Huyết áp (mmHg)</label>
-                        <input type="text" name="blood_pressure" class="form-control" placeholder="VD: 120/80"
+                        <input type="text" name="blood_pressure" class="form-control" placeholder="VD: 120/80" pattern="^\d{2,3}\/\d{2,3}$" inputmode="numeric" maxlength="7"
                                value="<?php echo $record ? h($record['blood_pressure'] ?? '') : ''; ?>">
                     </div>
                     <div class="form-group">
                         <label>Nhịp tim (bpm)</label>
-                        <input type="number" name="heart_rate" class="form-control" placeholder="VD: 75" min="0"
+                        <input type="number" name="heart_rate" class="form-control" placeholder="VD: 75" min="20" max="250" step="1"
                                value="<?php echo ($record && $record['heart_rate'] !== null) ? (int)$record['heart_rate'] : ''; ?>">
                     </div>
                     <div class="form-group">
                         <label>Nhiệt độ (°C)</label>
-                        <input type="number" step="0.1" name="temperature" class="form-control" placeholder="VD: 36.5" min="0"
+                        <input type="number" step="0.1" name="temperature" class="form-control" placeholder="VD: 36.5" min="30" max="45"
                                value="<?php echo ($record && $record['temperature'] !== null) ? h($record['temperature']) : ''; ?>">
                     </div>
                     <div class="form-group">
                         <label>Chiều cao (cm)</label>
-                        <input type="number" step="0.1" name="height" class="form-control" placeholder="VD: 165.5" min="0"
+                        <input type="number" step="0.1" name="height" class="form-control" placeholder="VD: 165.5" min="30" max="250"
                                value="<?php echo ($record && $record['height'] !== null) ? h($record['height']) : ''; ?>">
                     </div>
                     <div class="form-group">
                         <label>Cân nặng (kg)</label>
-                        <input type="number" step="0.1" name="weight" class="form-control" placeholder="VD: 55.5" min="0"
+                        <input type="number" step="0.1" name="weight" class="form-control" placeholder="VD: 55.5" min="1" max="500"
                                value="<?php echo ($record && $record['weight'] !== null) ? h($record['weight']) : ''; ?>">
                     </div>
                 </div>
 
                 <h2 class="section-title">🩺 Chẩn đoán</h2>
                 <div class="form-group">
-                    <textarea name="diagnosis" class="form-control" required
+                    <textarea name="diagnosis" class="form-control" required minlength="10" maxlength="1000"
                               placeholder="VD: Chẩn đoán chính: ...&#10;Chẩn đoán kèm theo: ..."><?php
                         echo $record ? h($record['diagnosis'] ?? '') : '';
                     ?></textarea>
@@ -490,7 +518,7 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
 
                 <h2 class="section-title">💡 Kế hoạch điều trị</h2>
                 <div class="form-group">
-                    <textarea name="treatment_plan" class="form-control"
+                    <textarea name="treatment_plan" class="form-control" required minlength="10" maxlength="2000"
                               placeholder="- Hướng điều trị:&#10;- Dặn dò:&#10;- Tái khám:"><?php
                         echo $record ? h($record['treatment_plan'] ?? '') : '';
                     ?></textarea>
@@ -500,7 +528,7 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
 
                 <div class="form-group">
                     <label>Ghi chú đơn thuốc</label>
-                    <textarea name="prescription_note" class="form-control"
+                    <textarea name="prescription_note" class="form-control" maxlength="1000"
                               placeholder="VD: Uống thuốc đúng giờ. Nếu đau tăng/sốt cao, tái khám ngay."><?php
                         echo $prescription_header ? h($prescription_header['note'] ?? '') : '';
                     ?></textarea>
@@ -568,7 +596,7 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
 
                 <h2 class="section-title">📝 Ghi chú thêm</h2>
                 <div class="form-group">
-                    <textarea name="notes" class="form-control" placeholder="VD: Hẹn tái khám..."><?php
+                    <textarea name="notes" class="form-control" maxlength="2000" placeholder="VD: Hẹn tái khám..."><?php
                         echo $record ? h($record['notes'] ?? '') : '';
                     ?></textarea>
                 </div>
@@ -636,12 +664,106 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
         }
 
         document.getElementById('examForm').addEventListener('submit', function(e) {
-            const diagnosis = document.querySelector('textarea[name="diagnosis"]').value.trim();
-            if (!diagnosis) {
+            const diagnosisInput = document.querySelector('textarea[name="diagnosis"]');
+            const treatmentPlanInput = document.querySelector('textarea[name="treatment_plan"]');
+            const notesInput = document.querySelector('textarea[name="notes"]');
+            const medicalHistoryInput = document.querySelector('textarea[name="medical_history"]');
+            const prescriptionNoteInput = document.querySelector('textarea[name="prescription_note"]');
+            const bloodPressureInput = document.querySelector('input[name="blood_pressure"]');
+            const heartRateInput = document.querySelector('input[name="heart_rate"]');
+            const temperatureInput = document.querySelector('input[name="temperature"]');
+            const heightInput = document.querySelector('input[name="height"]');
+            const weightInput = document.querySelector('input[name="weight"]');
+
+            const diagnosis = diagnosisInput.value.trim();
+            const treatmentPlan = treatmentPlanInput.value.trim();
+            const notes = notesInput.value.trim();
+            const medicalHistory = medicalHistoryInput.value.trim();
+            const prescriptionNote = prescriptionNoteInput.value.trim();
+            const bloodPressure = bloodPressureInput.value.trim();
+            const heartRate = heartRateInput.value.trim();
+            const temperature = temperatureInput.value.trim();
+            const height = heightInput.value.trim();
+            const weight = weightInput.value.trim();
+
+            const setInvalid = (input, invalid) => {
+                input.style.borderColor = invalid ? '#f44336' : '#ddd';
+            };
+            const fail = (input, message) => {
                 e.preventDefault();
-                alert('Vui lòng nhập chẩn đoán!');
+                setInvalid(input, true);
+                input.focus();
+                alert(message);
                 return false;
+            };
+            const validDecimal = (value, min, max, scale = 2, integerOnly = false) => {
+                if (!value) return true;
+                const normalized = value.replace(',', '.');
+                const regex = integerOnly
+                    ? /^\d+$/
+                    : new RegExp('^\d+(\.\d{1,' + scale + '})?$');
+                if (!regex.test(normalized)) return false;
+                const num = Number(normalized);
+                return !Number.isNaN(num) && num >= min && num <= max;
+            };
+
+            if (diagnosis.length < 10 || diagnosis.length > 1000) {
+                return fail(diagnosisInput, 'Chẩn đoán phải có từ 10 đến 1000 ký tự!');
             }
+            setInvalid(diagnosisInput, false);
+
+            if (treatmentPlan.length < 10 || treatmentPlan.length > 2000) {
+                return fail(treatmentPlanInput, 'Kế hoạch điều trị phải có từ 10 đến 2000 ký tự!');
+            }
+            setInvalid(treatmentPlanInput, false);
+
+            if (notes.length > 2000) {
+                return fail(notesInput, 'Ghi chú thêm không được vượt quá 2000 ký tự!');
+            }
+            setInvalid(notesInput, false);
+
+            if (medicalHistory.length > 2000) {
+                return fail(medicalHistoryInput, 'Tiền sử / Dị ứng không được vượt quá 2000 ký tự!');
+            }
+            setInvalid(medicalHistoryInput, false);
+
+            if (prescriptionNote.length > 1000) {
+                return fail(prescriptionNoteInput, 'Ghi chú đơn thuốc không được vượt quá 1000 ký tự!');
+            }
+            setInvalid(prescriptionNoteInput, false);
+
+            if (bloodPressure && !/^(\d{2,3})\s*\/\s*(\d{2,3})$/.test(bloodPressure)) {
+                return fail(bloodPressureInput, 'Huyết áp phải đúng định dạng ví dụ 120/80!');
+            }
+            if (bloodPressure) {
+                const match = bloodPressure.match(/^(\d{2,3})\s*\/\s*(\d{2,3})$/);
+                const sys = Number(match[1]);
+                const dia = Number(match[2]);
+                if (sys < 50 || sys > 260 || dia < 30 || dia > 160 || sys <= dia) {
+                    return fail(bloodPressureInput, 'Huyết áp nằm ngoài ngưỡng hợp lệ hoặc tâm thu phải lớn hơn tâm trương!');
+                }
+            }
+            setInvalid(bloodPressureInput, false);
+
+            if (!validDecimal(heartRate, 20, 250, 0, true)) {
+                return fail(heartRateInput, 'Nhịp tim phải là số nguyên trong khoảng 20 - 250!');
+            }
+            setInvalid(heartRateInput, false);
+
+            if (!validDecimal(temperature, 30, 45, 1, false)) {
+                return fail(temperatureInput, 'Nhiệt độ phải nằm trong khoảng 30 - 45 và tối đa 1 chữ số thập phân!');
+            }
+            setInvalid(temperatureInput, false);
+
+            if (!validDecimal(height, 30, 250, 2, false)) {
+                return fail(heightInput, 'Chiều cao phải nằm trong khoảng 30 - 250!');
+            }
+            setInvalid(heightInput, false);
+
+            if (!validDecimal(weight, 1, 500, 2, false)) {
+                return fail(weightInput, 'Cân nặng phải nằm trong khoảng 1 - 500!');
+            }
+            setInvalid(weightInput, false);
 
             const medNames = document.querySelectorAll('input[name="medication_name[]"]');
             let valid = true;
@@ -654,6 +776,32 @@ $patient_initial = mb_substr($patient_name ?: 'B', 0, 1, 'UTF-8');
                     input.style.borderColor = '#ddd';
                 }
             });
+
+            if (!valid) {
+                e.preventDefault();
+                alert('Vui lòng điền đầy đủ tên thuốc!');
+                return false;
+            }
+
+            const days = document.querySelectorAll('input[name="days[]"]');
+            days.forEach(d => {
+                const v = parseInt(d.value || '0', 10);
+                if (isNaN(v) || v < 1) {
+                    valid = false;
+                    d.style.borderColor = '#f44336';
+                } else {
+                    d.style.borderColor = '#ddd';
+                }
+            });
+
+            if (!valid) {
+                e.preventDefault();
+                alert('Số ngày dùng thuốc phải >= 1');
+                return false;
+            }
+
+            return true;
+        });
 
             if (!valid) {
                 e.preventDefault();

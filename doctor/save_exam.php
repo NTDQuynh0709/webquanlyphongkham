@@ -66,6 +66,32 @@ function encrypt_db(?string $plain): ?string {
     return base64_encode($iv . $tag . $ciphertext);
 }
 
+function decrypt_db(?string $encrypted): ?string {
+    if ($encrypted === null || trim($encrypted) === '') return null;
+
+    $key = enc_key();
+    $raw = base64_decode($encrypted, true);
+    if ($raw === false) return null;
+
+    // GCM format: iv(12) | tag(16) | ciphertext
+    if (strlen($raw) < 28) return null;
+
+    $iv = substr($raw, 0, 12);
+    $tag = substr($raw, 12, 16);
+    $ciphertext = substr($raw, 28);
+
+    $plain = openssl_decrypt(
+        $ciphertext,
+        'aes-256-gcm',
+        $key,
+        OPENSSL_RAW_DATA,
+        $iv,
+        $tag
+    );
+
+    return ($plain === false) ? null : $plain;
+}
+
 // ===== Helpers =====
 function post_trim(string $key, string $default = ''): string {
     return trim((string)($_POST[$key] ?? $default));
@@ -84,6 +110,76 @@ function valid_date_ymd(string $s): bool {
     return (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $s);
 }
 
+function normalize_text(?string $v): string {
+    $v = trim((string)($v ?? ''));
+    $v = preg_replace('/\s+/u', ' ', $v);
+    return trim((string)$v);
+}
+function nullable_text(?string $v): ?string {
+    $v = normalize_text($v);
+    return $v === '' ? null : $v;
+}
+function validate_required_text(string $label, ?string $value, int $min = 1, int $max = 1000): ?string {
+    $value = normalize_text($value);
+    $len = mb_strlen($value, 'UTF-8');
+    if ($value === '') return $label . ' là bắt buộc!';
+    if ($len < $min) return $label . ' phải có ít nhất ' . $min . ' ký tự!';
+    if ($len > $max) return $label . ' không được vượt quá ' . $max . ' ký tự!';
+    return null;
+}
+function validate_optional_text_length(string $label, ?string $value, int $max = 1000): ?string {
+    $value = normalize_text($value);
+    if ($value !== '' && mb_strlen($value, 'UTF-8') > $max) {
+        return $label . ' không được vượt quá ' . $max . ' ký tự!';
+    }
+    return null;
+}
+function validate_decimal_range(string $label, ?string $value, float $min, float $max, int $scale = 2): array {
+    $value = normalize_text($value);
+    if ($value === '') return [true, null, null];
+
+    $normalized = str_replace(',', '.', $value);
+
+    if ($scale <= 0) {
+        if (!preg_match('/^\d+$/', $normalized)) {
+            return [false, null, $label . ' phải là số nguyên hợp lệ!'];
+        }
+    } else {
+        if (!preg_match('/^\d+(\.\d{1,' . $scale . '})?$/', $normalized)) {
+            return [false, null, $label . ' phải là số hợp lệ!'];
+        }
+    }
+
+    $number = (float)$normalized;
+    if ($number < $min || $number > $max) {
+        return [false, null, $label . ' phải nằm trong khoảng ' .
+            rtrim(rtrim((string)$min, '0'), '.') . ' - ' .
+            rtrim(rtrim((string)$max, '0'), '.') . '!'];
+    }
+
+    return [true, $normalized, null];
+}
+function validate_blood_pressure(?string $value): array {
+    $value = normalize_text($value);
+    if ($value === '') return [true, null, null];
+
+    if (!preg_match('/^(\d{2,3})\s*\/\s*(\d{2,3})$/', $value, $m)) {
+        return [false, null, 'Huyết áp phải đúng định dạng ví dụ 120/80!'];
+    }
+
+    $sys = (int)$m[1];
+    $dia = (int)$m[2];
+
+    if ($sys < 50 || $sys > 260 || $dia < 30 || $dia > 160) {
+        return [false, null, 'Huyết áp nằm ngoài ngưỡng hợp lệ!'];
+    }
+    if ($sys <= $dia) {
+        return [false, null, 'Huyết áp tâm thu phải lớn hơn tâm trương!'];
+    }
+
+    return [true, $sys . '/' . $dia, null];
+}
+
 // ===== Input =====
 $appointment_id = (int)($_POST['appointment_id'] ?? 0);
 $return_date    = post_trim('return_date', date('Y-m-d'));
@@ -95,28 +191,74 @@ if ($appointment_id <= 0) {
 }
 
 $blood_pressure = post_trim('blood_pressure', '');
-$heart_rate     = post_int_nullable('heart_rate');
-$temperature    = post_float_nullable('temperature');
-$height         = post_float_nullable('height');
-$weight         = post_float_nullable('weight');
+$heart_rate_raw  = post_trim('heart_rate', '');
+$temperature_raw = post_trim('temperature', '');
+$height_raw      = post_trim('height', '');
+$weight_raw      = post_trim('weight', '');
 
-$diagnosis      = post_trim('diagnosis', '');
-$treatment_plan = post_trim('treatment_plan', '');
-$notes          = post_trim('notes', '');
+$diagnosis      = normalize_text(post_trim('diagnosis', ''));
+$treatment_plan = normalize_text(post_trim('treatment_plan', ''));
+$notes          = normalize_text(post_trim('notes', ''));
 
 // ✅ Tiền sử / Dị ứng (lưu vào patients.medical_history)
-$medical_history = post_trim('medical_history', '');
+$medical_history = normalize_text(post_trim('medical_history', ''));
 
 // Prescription
-$prescription_note = post_trim('prescription_note', '');
+$prescription_note = normalize_text(post_trim('prescription_note', ''));
 
 $medication_names = $_POST['medication_name'] ?? [];
 $dosages          = $_POST['dosage'] ?? [];
 $days_list        = $_POST['days'] ?? [];
 $instructions     = $_POST['instructions'] ?? [];
 
-if ($diagnosis === '') {
-    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date));
+if ($msg = validate_required_text('Chẩn đoán', $diagnosis, 10, 1000)) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($msg));
+    exit;
+}
+if ($msg = validate_required_text('Kế hoạch điều trị', $treatment_plan, 10, 2000)) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($msg));
+    exit;
+}
+if ($msg = validate_optional_text_length('Ghi chú thêm', $notes, 2000)) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($msg));
+    exit;
+}
+if ($msg = validate_optional_text_length('Tiền sử / Dị ứng', $medical_history, 2000)) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($msg));
+    exit;
+}
+if ($msg = validate_optional_text_length('Ghi chú đơn thuốc', $prescription_note, 1000)) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($msg));
+    exit;
+}
+
+[$okBp, $blood_pressure, $bpError] = validate_blood_pressure($blood_pressure);
+if (!$okBp) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($bpError));
+    exit;
+}
+
+[$okHr, $heart_rate, $hrError] = validate_decimal_range('Nhịp tim', $heart_rate_raw, 20, 250, 0);
+if (!$okHr) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($hrError));
+    exit;
+}
+
+[$okTemp, $temperature, $tempError] = validate_decimal_range('Nhiệt độ', $temperature_raw, 30, 45, 1);
+if (!$okTemp) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($tempError));
+    exit;
+}
+
+[$okHeight, $height, $heightError] = validate_decimal_range('Chiều cao', $height_raw, 30, 250, 2);
+if (!$okHeight) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($heightError));
+    exit;
+}
+
+[$okWeight, $weight, $weightError] = validate_decimal_range('Cân nặng', $weight_raw, 1, 500, 2);
+if (!$okWeight) {
+    header('Location: exam.php?id=' . $appointment_id . '&date=' . urlencode($return_date) . '&error=' . urlencode($weightError));
     exit;
 }
 
@@ -291,12 +433,12 @@ try {
             ");
             foreach ($items as $it) {
                 $stmtItem->execute([
-                $prescription_id,
-                $it['medication_name'],
-                $it['dosage'],
-                (int)$it['days'],
-                $it['instructions'],
-            ]);
+                    $prescription_id,
+                    encrypt_db($it['medication_name']),
+                    encrypt_db($it['dosage']),
+                    (int)$it['days'],
+                    encrypt_db($it['instructions']),
+                ]);
             }
         }
     } else {
