@@ -540,8 +540,8 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
                             <div class="medication-row">
                                 <div class="field">
                                     <label class="mini-label">Tên thuốc</label>
-                                    <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg" required
-                                           value="<?php echo h($it['medication_name'] ?? ''); ?>">
+                                    <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg"
+       value="<?php echo h($it['medication_name'] ?? ''); ?>">
                                 </div>
 
                                 <div class="field">
@@ -552,8 +552,8 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
 
                                 <div class="field">
                                     <label class="mini-label">Số ngày</label>
-                                    <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5" required
-                                           value="<?php echo (int)($it['days'] ?? 1); ?>">
+                                    <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5"
+       value="<?php echo (int)($it['days'] ?? 1); ?>">
                                 </div>
 
                                 <div class="field">
@@ -569,7 +569,7 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
                         <div class="medication-row">
                             <div class="field">
                                 <label class="mini-label">Tên thuốc</label>
-                                <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg" required>
+                                <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg">
                             </div>
 
                             <div class="field">
@@ -578,9 +578,9 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
                             </div>
 
                             <div class="field">
-                                <label class="mini-label">Số ngày</label>
-                                <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5" value="1" required>
-                            </div>
+    <label class="mini-label">Số ngày</label>
+    <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5" value="1">
+</div>
 
                             <div class="field">
                                 <label class="mini-label">Hướng dẫn</label>
@@ -616,10 +616,10 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
             newRow.className = 'medication-row';
             newRow.innerHTML = `
                 <div class="field">
-                    <label class="mini-label">Tên thuốc</label>
-                    <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg" required>
-                    <div class="mini-hint">Tên + hàm lượng (nếu có)</div>
-                </div>
+    <label class="mini-label">Tên thuốc</label>
+    <input type="text" name="medication_name[]" class="form-control" placeholder="VD: Omeprazole 20mg">
+    <div class="mini-hint">Tên + hàm lượng (nếu có)</div>
+</div>
 
                 <div class="field">
                     <label class="mini-label">Liều dùng</label>
@@ -629,7 +629,7 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
 
                 <div class="field">
                     <label class="mini-label">Số ngày</label>
-                    <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5" value="1" required>
+                    <input type="number" min="1" name="days[]" class="form-control" placeholder="VD: 5" value="1">
                     <div class="mini-hint">Dùng trong bao nhiêu ngày</div>
                 </div>
 
@@ -765,69 +765,38 @@ $medicalHistoryPlain = decryptData($patient['medical_history'] ?? '');
             }
             setInvalid(weightInput, false);
 
+            
+
             const medNames = document.querySelectorAll('input[name="medication_name[]"]');
-            let valid = true;
+const days = document.querySelectorAll('input[name="days[]"]');
 
-            medNames.forEach(input => {
-                if (!input.value.trim()) {
-                    valid = false;
-                    input.style.borderColor = '#f44336';
-                } else {
-                    input.style.borderColor = '#ddd';
-                }
-            });
+for (let i = 0; i < medNames.length; i++) {
+    const name = medNames[i].value.trim();
+    const dayInput = days[i];
+    const dayValue = parseInt(dayInput.value || '0', 10);
 
-            if (!valid) {
-                e.preventDefault();
-                alert('Vui lòng điền đầy đủ tên thuốc!');
-                return false;
-            }
-
-            const days = document.querySelectorAll('input[name="days[]"]');
-            days.forEach(d => {
-                const v = parseInt(d.value || '0', 10);
-                if (isNaN(v) || v < 1) {
-                    valid = false;
-                    d.style.borderColor = '#f44336';
-                } else {
-                    d.style.borderColor = '#ddd';
-                }
-            });
-
-            if (!valid) {
-                e.preventDefault();
-                alert('Số ngày dùng thuốc phải >= 1');
-                return false;
-            }
+    if (name !== '') {
+        // Nếu có nhập tên thuốc thì mới kiểm days
+        if (isNaN(dayValue) || dayValue < 1) {
+            e.preventDefault();
+            dayInput.style.borderColor = '#f44336';
+            dayInput.focus();
+            alert('Nếu đã nhập thuốc thì số ngày phải >= 1');
+            return false;
+        } else {
+            dayInput.style.borderColor = '#ddd';
+        }
+    } else {
+        // Không nhập thuốc thì bỏ qua
+        dayInput.style.borderColor = '#ddd';
+    }
+}
 
             return true;
         });
 
-            if (!valid) {
-                e.preventDefault();
-                alert('Vui lòng điền đầy đủ tên thuốc!');
-                return false;
-            }
-
-            const days = document.querySelectorAll('input[name="days[]"]');
-            days.forEach(d => {
-                const v = parseInt(d.value || '0', 10);
-                if (isNaN(v) || v < 1) {
-                    valid = false;
-                    d.style.borderColor = '#f44336';
-                } else {
-                    d.style.borderColor = '#ddd';
-                }
-            });
-
-            if (!valid) {
-                e.preventDefault();
-                alert('Số ngày dùng thuốc phải >= 1');
-                return false;
-            }
-
-            return true;
-        });
+            
+        
     </script>
 </body>
 </html>
