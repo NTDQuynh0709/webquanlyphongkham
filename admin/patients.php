@@ -118,6 +118,42 @@ function validate_blood_pressure(?string $value): array {
 
     return [true, $sys . '/' . $dia, null];
 }
+function normalize_phone(?string $value): string {
+    $value = trim((string)($value ?? ''));
+    if ($value === '') return '';
+
+    // bỏ khoảng trắng, dấu chấm, gạch ngang, ngoặc
+    $value = preg_replace('/[\s\.\-\(\)]+/', '', $value);
+
+    // normalize +84xxxxxxxxx hoặc 84xxxxxxxxx -> 0xxxxxxxxx
+    if (preg_match('/^\+84\d{9}$/', $value)) {
+        $value = '0' . substr($value, 3);
+    } elseif (preg_match('/^84\d{9}$/', $value)) {
+        $value = '0' . substr($value, 2);
+    }
+
+    return $value;
+}
+
+function validate_phone(string $label, ?string $value): array {
+    $normalized = normalize_phone($value);
+
+    if ($normalized === '') {
+        return [false, null, $label . ' là bắt buộc!'];
+    }
+
+    // chỉ chứa số
+    if (!preg_match('/^\d+$/', $normalized)) {
+        return [false, null, $label . ' chỉ được chứa số!'];
+    }
+
+    // bắt đầu bằng 0 và đủ 10 số
+    if (!preg_match('/^0\d{9}$/', $normalized)) {
+        return [false, null, $label . ' phải gồm đúng 10 số và bắt đầu bằng số 0!'];
+    }
+
+    return [true, $normalized, null];
+}
 function has_record_changes(array $old, array $new): bool {
     foreach ($new as $k => $v) {
         if (compare_value($old[$k] ?? null) !== compare_value($v)) {
@@ -274,23 +310,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
         // ADD
         if ($action === 'add') {
             $full_name = trim($_POST['full_name'] ?? '');
-            $phone = trim($_POST['phone'] ?? '');
+            $phone = $_POST['phone'] ?? '';
             $date_of_birth = $_POST['date_of_birth'] ?? '';
             $gender = $_POST['gender'] ?? null;
             $address = $_POST['address'] ?? null;
             $medical_history = $_POST['medical_history'] ?? null;
 
-            if ($full_name === '' || $phone === '' || $date_of_birth === '') {
+            if ($full_name === '' || $date_of_birth === '') {
                 echo json_encode(['success' => false, 'message' => 'Họ tên, SĐT, Ngày sinh là bắt buộc!']);
                 exit;
             }
 
-            $stmt = $conn->prepare("SELECT COUNT(*) FROM patients WHERE phone = :phone AND is_deleted = 0");
-            $stmt->execute(['phone' => $phone]);
-            if ((int)$stmt->fetchColumn() > 0) {
-                echo json_encode(['success' => false, 'message' => 'SĐT đã tồn tại!']);
+            [$okPhone, $phoneNormalized, $phoneError] = validate_phone('SĐT', $phone);
+            if (!$okPhone) {
+                echo json_encode(['success' => false, 'message' => $phoneError]);
                 exit;
             }
+            $phone = $phoneNormalized;
+
+            
 
             $stmt = $conn->prepare("
                 INSERT INTO patients (full_name, phone, date_of_birth, gender, address, medical_history, created_at, updated_at, is_deleted)
@@ -321,29 +359,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action'])) {
         if ($action === 'edit') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             $full_name = trim($_POST['full_name'] ?? '');
-            $phone = trim($_POST['phone'] ?? '');
+            $phone = $_POST['phone'] ?? '';
             $date_of_birth = $_POST['date_of_birth'] ?? '';
             $gender = $_POST['gender'] ?? null;
             $address = $_POST['address'] ?? null;
             $medical_history = $_POST['medical_history'] ?? null;
 
-            if ($patient_id <= 0 || $full_name === '' || $phone === '' || $date_of_birth === '') {
+            if ($patient_id <= 0 || $full_name === '' || $date_of_birth === '') {
                 echo json_encode(['success' => false, 'message' => 'Thiếu dữ liệu cập nhật (ID/Họ tên/SĐT/Ngày sinh)!']);
                 exit;
             }
 
-            $stmt = $conn->prepare("
-                SELECT COUNT(*)
-                FROM patients
-                WHERE phone = :phone
-                  AND patient_id != :id
-                  AND is_deleted = 0
-            ");
-            $stmt->execute(['phone' => $phone, 'id' => $patient_id]);
-            if ((int)$stmt->fetchColumn() > 0) {
-                echo json_encode(['success' => false, 'message' => 'SĐT đã tồn tại!']);
+            [$okPhone, $phoneNormalized, $phoneError] = validate_phone('SĐT', $phone);
+            if (!$okPhone) {
+                echo json_encode(['success' => false, 'message' => $phoneError]);
                 exit;
             }
+            $phone = $phoneNormalized;
+
 
             $stmt = $conn->prepare("
                 UPDATE patients
@@ -1212,7 +1245,16 @@ tbody tr.selected{background:#f0f2ff !important}
                                     <label>Số điện thoại <span class="req">*</span></label>
                                     <div class="input-wrap">
                                         <span class="input-icon">📞</span>
-                                        <input class="with-icon" type="tel" name="phone" id="phone" placeholder="Nhập số điện thoại" required />
+                                        <input class="with-icon"
+                                                type="tel"
+                                                name="phone"
+                                                id="phone"
+                                                placeholder="Nhập số điện thoại"
+                                                required
+                                                inputmode="numeric"
+                                                maxlength="12"
+                                                pattern="(\+84|84|0)[0-9]{9}"
+                                            />
                                     </div>
                                     <small>Dùng để tra cứu và liên hệ bệnh nhân</small>
                                 </div>

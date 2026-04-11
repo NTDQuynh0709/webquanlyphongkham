@@ -45,6 +45,25 @@ function is_valid_time_hm($t): bool {
     return ($hh >= 0 && $hh <= 23 && $mm >= 0 && $mm <= 59);
 }
 
+function normalize_phone(string $phone): string {
+    $phone = trim($phone);
+
+    // bỏ khoảng trắng
+    $phone = preg_replace('/\s+/', '', $phone);
+
+    // +84 → 0
+    if (strpos($phone, '+84') === 0) {
+        $phone = '0' . substr($phone, 3);
+    }
+
+    return $phone;
+}
+
+function is_valid_phone(string $phone): bool {
+    // chỉ số + đúng 10 số + bắt đầu bằng 0
+    return (bool)preg_match('/^0\d{9}$/', $phone);
+}
+
 function classify_patient_search_input(string $q): array {
     $raw = trim($q);
 
@@ -582,8 +601,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $timeHm = trim((string)($_POST['appointment_time'] ?? ''));
 
     if ($patient_id <= 0) {
-        if ($new_full_name === '') $errors[] = 'Vui lòng nhập họ tên bệnh nhân';
-        if ($new_phone === '') $errors[] = 'Vui lòng nhập SĐT bệnh nhân';
+    if ($new_full_name === '') $errors[] = 'Vui lòng nhập họ tên bệnh nhân';
+    if ($new_phone === '') {
+        $errors[] = 'Vui lòng nhập SĐT bệnh nhân';
+    } else {
+        // normalize
+        $new_phone = normalize_phone($new_phone);
+
+        // validate
+        if (!is_valid_phone($new_phone)) {
+            $errors[] = 'SĐT phải gồm 10 số, bắt đầu bằng 0 và chỉ chứa số';
+        }
+    }
         if ($new_dob === '') $errors[] = 'Vui lòng nhập ngày sinh bệnh nhân';
         if ($new_dob !== '' && !is_valid_date($new_dob)) $errors[] = 'Ngày sinh không hợp lệ';
 
@@ -605,35 +634,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
 
     if (!$errors && $patient_id <= 0) {
         try {
-            $checkPhone = $conn->prepare("
-                SELECT patient_id
-                FROM patients
-                WHERE phone = ?
-                  AND is_deleted = 0
-                LIMIT 1
-            ");
-            $checkPhone->execute([$new_phone]);
-            $existingPatientId = $checkPhone->fetchColumn();
+            
+            $st = $conn->prepare("
+    INSERT INTO patients (full_name, phone, date_of_birth, gender, address)
+    VALUES (?, ?, ?, ?, ?)
+");
+$st->execute([
+    $new_full_name,
+    $new_phone,
+    $new_dob,
+    ($new_gender !== '' ? $new_gender : null),
+    ($new_address !== '' ? $new_address : null),
+]);
 
-            if ($existingPatientId) {
-                $patient_id = (int)$existingPatientId;
-                $selectedPatient = getPatient($conn, $patient_id);
-            } else {
-                $st = $conn->prepare("
-                    INSERT INTO patients (full_name, phone, date_of_birth, gender, address)
-                    VALUES (?, ?, ?, ?, ?)
-                ");
-                $st->execute([
-                    $new_full_name,
-                    $new_phone,
-                    $new_dob,
-                    ($new_gender !== '' ? $new_gender : null),
-                    ($new_address !== '' ? $new_address : null),
-                ]);
-
-                $patient_id = (int)$conn->lastInsertId();
-                $selectedPatient = getPatient($conn, $patient_id);
-            }
+$patient_id = (int)$conn->lastInsertId();
+$selectedPatient = getPatient($conn, $patient_id);
         } catch (Throwable $e) {
             $errors[] = 'Lỗi tạo bệnh nhân: ' . $e->getMessage();
         }
