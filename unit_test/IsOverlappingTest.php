@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../src/AppointmentRules.php';
+require_once __DIR__ . '/../unit_test_logic/IsOverlapping_Logic.php';
 
 final class IsOverlappingTest extends TestCase
 {
