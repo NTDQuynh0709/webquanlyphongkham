@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 const SERVICE_MIN = 20;
-const STEP_MIN = 5;
+
 
 function add_minutes(DateTime $dt, int $min): DateTime {
     $c = clone $dt;
